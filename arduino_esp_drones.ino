@@ -160,6 +160,7 @@ int motor1 = 3 , motor2 = 9 , motor3 = 10 , motor4 = 11;
 int valueM1, valueM2, valueM3, valueM4;
 int throttle;
 int m1, m2, m3, m4;
+float gainYaw14, gainYaw23;
 /*
         m1                       m2
          o                      o
@@ -180,15 +181,15 @@ int m1, m2, m3, m4;
 /*@@@@@@@@@@@@@@@@@@@@@@@@@ End set var PWM  @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
 // kp 0.8,ki 0 ,kd 0.3//ch3_power * 0.6
 
-PID rolls  (&InputRoll,  &OutputRoll,  &SetpointR, 0.8 , 0, 0.3,   DIRECT); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
-PID pichts (&InputPicht, &OutputPicht, &SetpointP, 0.8, 0, 0.3,   DIRECT); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
-PID yaws   (&InputYaw,   &OutputYaw,   &SetpointY, 0.4, 0, 0, DIRECT); // if yaw < 0 23 up(Throttle + OutYaw) and if yaw > 0 14 up(Throttle + OutYaw)
+PID rolls  (&InputRoll,  &OutputRoll,  &SetpointR, 0.8 , 0, 0.31,   DIRECT); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
+PID pichts (&InputPicht, &OutputPicht, &SetpointP, 0.8, 0, 0.31,   DIRECT); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
+PID yaws   (&InputYaw,   &OutputYaw,   &SetpointY, 0.5, 0, 0.3, DIRECT); // if yaw < 0 23 up(Throttle + OutYaw) and if yaw > 0 14 up(Throttle + OutYaw)
 //PID howers (&InputHower,   &OutputHower,   &SetpointHower, 1, 1, 1, DIRECT); // if az < setpoint  all motor up   and   az > setpoint all motor down
 
 //revers PID
-PID rollsR  (&InputRoll,  &OutputRollR,  &SetpointR, 0.8 , 0, 0.3,   REVERSE); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
-PID pichtsR (&InputPicht, &OutputPichtR, &SetpointP, 0.8, 0, 0.3,  REVERSE); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
-PID yawsR   (&InputYaw,   &OutputYawR,   &SetpointY, 0.4, 0, 0, REVERSE); // if yaw < 0 23 up(Throttle + OutYaw) and if yaw > 0 14 up(Throttle + OutYaw)
+PID rollsR  (&InputRoll,  &OutputRollR,  &SetpointR, 0.8, 0, 0.31,   REVERSE); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
+PID pichtsR (&InputPicht, &OutputPichtR, &SetpointP, 0.8, 0, 0.31,  REVERSE); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
+PID yawsR   (&InputYaw,   &OutputYawR,   &SetpointY, 0.5, 0, 0.3, REVERSE); // if yaw < 0 23 up(Throttle + OutYaw) and if yaw > 0 14 up(Throttle + OutYaw)
 
 int countReadMPU = 0;
 
@@ -201,7 +202,8 @@ unsigned long times, timeDetect, timeReadMPU, timeLED13, timeLost, timePidRolls,
 //end set var multitask
 unsigned long timeA, timeB, timeC;
 int countAB = 0;
-//boolean callPidWork = false;
+boolean battStates = false;
+int sensorValue = 0;        // value read from the pot
 
 
 
@@ -776,19 +778,23 @@ void readDataFromESP01() {
       //ch3_power = ch3_power*0.4;
       ch4_yaw = b.substring((b.indexOf('d') + 1), b.indexOf('p')).toInt();
       //
-      rollKp = b.substring((b.indexOf('p') + 1), b.indexOf('i')).toInt();
-      rollKi = b.substring((b.indexOf('i') + 1), b.indexOf('k')).toInt();
-      rollKd = b.substring((b.indexOf('k') + 1), b.indexOf('!')).toInt();
 
-      rollKp = rollKp / 10;
-      rollKi = rollKi / 10;
-      rollKd = rollKd / 10;
+      /* rollKp = b.substring((b.indexOf('p') + 1), b.indexOf('i')).toInt();
+       rollKi = b.substring((b.indexOf('i') + 1), b.indexOf('k')).toInt();
+       rollKd = b.substring((b.indexOf('k') + 1), b.indexOf('!')).toInt();
+
+       rollKp = rollKp / 10;
+       rollKi = rollKi / 10;
+       rollKd = rollKd / 10;
+       */
+      //
+      // gainYaw14,gainYaw23
+      gainYaw14 = 0.9;
+      gainYaw23 = 1.2;
+      //rolls.SetTunings(rollKp , rollKi, rollKd);
+      //rollsR.SetTunings(rollKp, rollKi, rollKd);
 
 
-      rolls.SetTunings(rollKp , rollKi, rollKd);
-      rollsR.SetTunings(rollKp, rollKi, rollKd);
-
-      
       // clear the string:
       inputString = "";
       //countC = 0;
@@ -852,15 +858,15 @@ void driveMotor(int outputPID1, int outputPID2, int outputPID3, int outputPID4) 
     valueM1 +=  (ch2_roll - 126) * 0.3;
     valueM3 +=  (ch2_roll - 126) * 0.3;
 
-    valueM2 -=  (ch2_roll - 126)*0.3;
-    valueM4 -=  (ch2_roll - 126)*0.3;
+    valueM2 -=  (ch2_roll - 126) * 0.3;
+    valueM4 -=  (ch2_roll - 126) * 0.3;
   }
   if (ch2_roll < 126) { //24 up for move left
     valueM2 +=  (126 - ch2_roll) * 0.3;
     valueM4 +=  (126 - ch2_roll) * 0.3;
 
-    valueM1 -=  (126 - ch2_roll)* 0.3;
-    valueM3 -=  (126 - ch2_roll)* 0.3;
+    valueM1 -=  (126 - ch2_roll) * 0.3;
+    valueM3 -=  (126 - ch2_roll) * 0.3;
 
   }
 
@@ -871,15 +877,15 @@ void driveMotor(int outputPID1, int outputPID2, int outputPID3, int outputPID4) 
     valueM3 +=  (ch1_Eleveltor - 126) * 0.3;
     valueM4 +=  (ch1_Eleveltor - 126) * 0.3;
 
-    valueM1 -=  (ch1_Eleveltor - 126)* 0.3;
-    valueM2 -=  (ch1_Eleveltor - 126)* 0.3;
+    valueM1 -=  (ch1_Eleveltor - 126) * 0.3;
+    valueM2 -=  (ch1_Eleveltor - 126) * 0.3;
   }
   if (ch1_Eleveltor < 126) { // 12up for move back
-    valueM1 +=  (126 - ch1_Eleveltor)* 0.3;
-    valueM2 +=  (126 - ch1_Eleveltor)* 0.3;
+    valueM1 +=  (126 - ch1_Eleveltor) * 0.3;
+    valueM2 +=  (126 - ch1_Eleveltor) * 0.3;
 
-    valueM3 -=  (126 - ch1_Eleveltor)* 0.3;
-    valueM4 -=  (126 - ch1_Eleveltor)* 0.3;
+    valueM3 -=  (126 - ch1_Eleveltor) * 0.3;
+    valueM4 -=  (126 - ch1_Eleveltor) * 0.3;
 
   }
 
@@ -979,6 +985,8 @@ void mpu6050Dmp() {
 
       //readDataFromESP01(); // read data from ESP
       callPID();
+      //ledStatus(300);
+      digitalWrite(LED_PIN, HIGH);
 
     }
 
@@ -1038,7 +1046,9 @@ void mpu6050Dmp() {
     */
     InputRoll =  rollAngel;
     InputPicht = pitchAngel;
+    InputYaw = ypr[0] * 180 / M_PI;
 
+    SetpointY += (ch4_yaw - 126) * 0.1f * 0.021f;
     //
     /*
      * call PID
@@ -1056,7 +1066,8 @@ void mpu6050Dmp() {
     if (pitchAngel < 4  && pitchAngel > -4  && rollAngel < 4 && rollAngel > -4 ) {
       //caribate = true;
       //call led
-      ledStatus(200);
+
+
       if (!caribate) {
         rolls.SetMode(AUTOMATIC);
         pichts.SetMode(AUTOMATIC);
@@ -1096,17 +1107,17 @@ void callPID() {
     tempYaw = 0;
     */
     //>>>>>>>>>>>>   call PID to work
-    if (rolls.Compute() && pichts.Compute() && rollsR.Compute() && pichtsR.Compute() /*&& yaws.Compute() && yawsR.Compute()*/) {
+    if (rolls.Compute() && pichts.Compute() && rollsR.Compute() && pichtsR.Compute() && yaws.Compute() && yawsR.Compute()) {
 
 
 
       //sum PID
 
 
-      m1 = (ch3_power * 0.85) + OutputRoll - OutputRollR + OutputPichtR - OutputPicht;
-      m2 = (ch3_power * 0.85) + OutputRollR - OutputRoll + OutputPichtR - OutputPicht;
-      m3 = (ch3_power * 0.85) + OutputRoll - OutputRollR + OutputPicht - OutputPichtR;
-      m4 = (ch3_power * 0.85)  + OutputRollR - OutputRoll + OutputPicht - OutputPichtR;
+      m1 = (ch3_power *  gainYaw14) + OutputRoll - OutputRollR + OutputPichtR - OutputPicht /*+ OutputYaw - OutputYawR*/;
+      m2 = (ch3_power *  gainYaw23) + OutputRollR - OutputRoll + OutputPichtR - OutputPicht /*- OutputYaw + OutputYawR*/;
+      m3 = ((ch3_power * 0.75) *  gainYaw23) + OutputRoll - OutputRollR + OutputPicht - OutputPichtR /*- OutputYaw + OutputYawR*/;
+      m4 = ((ch3_power * 0.70) *  gainYaw14 )  + OutputRollR - OutputRoll + OutputPicht - OutputPichtR /*+ OutputYaw - OutputYawR*/;
 
       //Drones move left 13up use PID rolls
       // m1 +=  OutputRoll;
@@ -1164,8 +1175,12 @@ void callPID() {
        *
        */
       // send  m1 m2 m3 m4 value to Motor drive for fix drones to stable
-
-      driveMotor(m1, m2, m3, m4);
+      if (checkBattery()) {
+        driveMotor(m1, m2, m3, m4);
+      }else{
+        ch3_power -= 100;
+        driveMotor(m1, m2, m3, m4);
+      }
 
 
       /* rollKp = rollKp + (ch3_power * 0.05);
@@ -1211,4 +1226,17 @@ void ledStatus(int timeBlink) {
   }
 }
 
+// funion for check batt low V cut off
+boolean checkBattery() {
+
+  sensorValue = analogRead(A1);// get battery V
+  if (sensorValue > 676) { // if battery V > 3.3 battStates = true
+    battStates = true;
+  } else { // if battery V < 3.3 battStates = false
+    battStates = false;
+  }
+
+  return battStates;
+}
+// end funion for check batt low V cut off
 

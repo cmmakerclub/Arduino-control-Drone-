@@ -1,5 +1,7 @@
 #include<Wire.h>
 #include <PID_v1.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_HMC5883_U.h>
 
 // I2Cdev and MPU6050 must be installed as libraries, or else the .cpp/.h files
 // for both classes must be in the include path of your project
@@ -73,7 +75,19 @@ volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin h
 void dmpDataReady() {
   mpuInterrupt = true;
 }
+/*
+ *
+ *             Set variable for HMC5883
+ */
+float heading;
+float declinationAngle = 0.22;
+float headingDegrees;
+float outputYawSetpoint;
 
+/*
+ *            End Set variable for HMC5883
+ *
+ */
 
 //--------MPU6050 _--------------
 /*roll arround Y--->
@@ -137,6 +151,7 @@ int ch1_Eleveltor, ch2_roll, ch3_power, ch4_yaw;
 double  SetpointP = 0, SetpointR = 0, SetpointY = 0;
 double rollKp = 0, rollKi = 0, rollKd = 0;
 int SampleTime  =  23;
+float rollPitchYawGain = 0.3;
 
 double  InputRoll, OutputRoll, OutputRollR; // right <---> left
 //double InputRoll24, OutputRoll24;
@@ -150,6 +165,9 @@ double  InputYaw, OutputYaw, OutputYawR; // spin left <------> right  !!!!!!!!!!
 double  InputHower, OutputHower, SetpointHower = 9.82;//
 boolean h = true;
 
+// Variables will change :
+int ledState = LOW;             // ledState used to set the LED
+
 // ^^^^^^^^^^^^ End set var PID ^^^^^^^^^^^//
 
 
@@ -160,7 +178,7 @@ int motor1 = 3 , motor2 = 9 , motor3 = 10 , motor4 = 11;
 int valueM1, valueM2, valueM3, valueM4;
 int throttle;
 int m1, m2, m3, m4;
-float gainYaw14, gainYaw23;
+//float gainYaw14, gainYaw23,eY,iX;
 /*
         m1                       m2
          o                      o
@@ -181,15 +199,15 @@ float gainYaw14, gainYaw23;
 /*@@@@@@@@@@@@@@@@@@@@@@@@@ End set var PWM  @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
 // kp 0.8,ki 0 ,kd 0.3//ch3_power * 0.6
 
-PID rolls  (&InputRoll,  &OutputRoll,  &SetpointR, 0.8 , 0, 0.31,   DIRECT); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
-PID pichts (&InputPicht, &OutputPicht, &SetpointP, 0.8, 0, 0.31,   DIRECT); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
-PID yaws   (&InputYaw,   &OutputYaw,   &SetpointY, 0.5, 0, 0.3, DIRECT); // if yaw < 0 23 up(Throttle + OutYaw) and if yaw > 0 14 up(Throttle + OutYaw)
+PID rolls  (&InputRoll,  &OutputRoll,  &SetpointR, 0.9 , 0, 0.35,   DIRECT); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
+PID pichts (&InputPicht, &OutputPicht, &SetpointP, 0.9, 0, 0.35,   DIRECT); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
+PID yaws   (&InputYaw,   &OutputYaw,   &SetpointY, 0.8, 0, 0.25, DIRECT); // spin right value degree +
 //PID howers (&InputHower,   &OutputHower,   &SetpointHower, 1, 1, 1, DIRECT); // if az < setpoint  all motor up   and   az > setpoint all motor down
 
 //revers PID
-PID rollsR  (&InputRoll,  &OutputRollR,  &SetpointR, 0.8, 0, 0.31,   REVERSE); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
-PID pichtsR (&InputPicht, &OutputPichtR, &SetpointP, 0.8, 0, 0.31,  REVERSE); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
-PID yawsR   (&InputYaw,   &OutputYawR,   &SetpointY, 0.5, 0, 0.3, REVERSE); // if yaw < 0 23 up(Throttle + OutYaw) and if yaw > 0 14 up(Throttle + OutYaw)
+PID rollsR  (&InputRoll,  &OutputRollR,  &SetpointR, 0.9, 0, 0.35,   REVERSE); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
+PID pichtsR (&InputPicht, &OutputPichtR, &SetpointP, 0.9, 0, 0.35,  REVERSE); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
+PID yawsR   (&InputYaw,   &OutputYawR,   &SetpointY, 0.8, 0, 0.25, REVERSE); // if yaw < 0 23 up(Throttle + OutYaw) and if yaw > 0 14 up(Throttle + OutYaw)
 
 int countReadMPU = 0;
 
@@ -205,11 +223,29 @@ int countAB = 0;
 boolean battStates = false;
 int sensorValue = 0;        // value read from the pot
 
+/*
+ *
+ *
+ */
+/* Assign a unique ID to this sensor at the same time */
+Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
 
-
+/*
+ *
+ */
 //
 void setup() {
   // put your setup code here, to run once:
+  /*
+   * set up HMC5883L
+   */
+
+  while (!mag.begin()) {
+    //wait for HMC5883 ok
+  }
+  /*
+   *
+   */
 
   /*pinMode(13, OUTPUT);
   // set MPU6050
@@ -789,8 +825,7 @@ void readDataFromESP01() {
        */
       //
       // gainYaw14,gainYaw23
-      gainYaw14 = 0.9;
-      gainYaw23 = 1.2;
+
       //rolls.SetTunings(rollKp , rollKi, rollKd);
       //rollsR.SetTunings(rollKp, rollKi, rollKd);
 
@@ -855,18 +890,24 @@ void driveMotor(int outputPID1, int outputPID2, int outputPID3, int outputPID4) 
 
   //input ch2_roll
   if (ch2_roll > 126) { //13 up for move right
-    valueM1 +=  (ch2_roll - 126) * 0.3;
-    valueM3 +=  (ch2_roll - 126) * 0.3;
 
-    valueM2 -=  (ch2_roll - 126) * 0.3;
-    valueM4 -=  (ch2_roll - 126) * 0.3;
+
+    valueM1 +=  (ch2_roll - 126) * rollPitchYawGain;
+    valueM3 +=  (ch2_roll - 126) * rollPitchYawGain;
+
+    valueM2 -=  (ch2_roll - 126) * rollPitchYawGain;
+    valueM4 -=  (ch2_roll - 126) * rollPitchYawGain;
+
   }
   if (ch2_roll < 126) { //24 up for move left
-    valueM2 +=  (126 - ch2_roll) * 0.3;
-    valueM4 +=  (126 - ch2_roll) * 0.3;
 
-    valueM1 -=  (126 - ch2_roll) * 0.3;
-    valueM3 -=  (126 - ch2_roll) * 0.3;
+
+    valueM2 +=  (126 - ch2_roll) * rollPitchYawGain;
+    valueM4 +=  (126 - ch2_roll) * rollPitchYawGain;
+
+    valueM1 -=  (126 - ch2_roll) * rollPitchYawGain;
+    valueM3 -=  (126 - ch2_roll) * rollPitchYawGain;
+
 
   }
 
@@ -874,18 +915,21 @@ void driveMotor(int outputPID1, int outputPID2, int outputPID3, int outputPID4) 
 
   //input ch1_Eleveltor
   if (ch1_Eleveltor > 126) { // 34up for move forward
-    valueM3 +=  (ch1_Eleveltor - 126) * 0.3;
-    valueM4 +=  (ch1_Eleveltor - 126) * 0.3;
 
-    valueM1 -=  (ch1_Eleveltor - 126) * 0.3;
-    valueM2 -=  (ch1_Eleveltor - 126) * 0.3;
+
+
+    valueM3 +=  (ch1_Eleveltor - 126) * rollPitchYawGain;
+    valueM4 +=  (ch1_Eleveltor - 126) * rollPitchYawGain;
+
+    valueM1 -=  (ch1_Eleveltor - 126) * rollPitchYawGain;
+    valueM2 -=  (ch1_Eleveltor - 126) * rollPitchYawGain;
   }
   if (ch1_Eleveltor < 126) { // 12up for move back
-    valueM1 +=  (126 - ch1_Eleveltor) * 0.3;
-    valueM2 +=  (126 - ch1_Eleveltor) * 0.3;
+    valueM1 +=  (126 - ch1_Eleveltor) * rollPitchYawGain;
+    valueM2 +=  (126 - ch1_Eleveltor) * rollPitchYawGain;
 
-    valueM3 -=  (126 - ch1_Eleveltor) * 0.3;
-    valueM4 -=  (126 - ch1_Eleveltor) * 0.3;
+    valueM3 -=  (126 - ch1_Eleveltor) * rollPitchYawGain;
+    valueM4 -=  (126 - ch1_Eleveltor) * rollPitchYawGain;
 
   }
 
@@ -893,18 +937,18 @@ void driveMotor(int outputPID1, int outputPID2, int outputPID3, int outputPID4) 
 
   // input ch4_yaw
   if (ch4_yaw > 126) { // 23up for spin right
-    valueM2 += (ch4_yaw - 126) * 0.9;
-    valueM3 += (ch4_yaw - 126) * 0.9;
+    valueM2 += (ch4_yaw - 126) * rollPitchYawGain;
+    valueM3 += (ch4_yaw - 126) * rollPitchYawGain;
     //
-    //valueM1 -= ch4_yaw - 126;
-    //valueM4 -= ch4_yaw - 126;
+    valueM1 -= (ch4_yaw - 126) * rollPitchYawGain;
+    valueM4 -= (ch4_yaw - 126) * rollPitchYawGain;
   }
   if (ch4_yaw < 126) { // 14up for spin left
-    valueM1 += (126 - ch4_yaw) * 0.9;
-    valueM4 += (126 - ch4_yaw) * 0.9;
+    valueM1 += (126 - ch4_yaw) * rollPitchYawGain;
+    valueM4 += (126 - ch4_yaw) * rollPitchYawGain;
 
-    //valueM2 -= 126 - ch4_yaw;
-    //valueM3 -= 126 - ch4_yaw;
+    valueM2 -= (126 - ch4_yaw) * rollPitchYawGain;
+    valueM3 -= (126 - ch4_yaw) * rollPitchYawGain;
 
   }
 
@@ -941,7 +985,7 @@ void driveMotor(int outputPID1, int outputPID2, int outputPID3, int outputPID4) 
   // end fix pwm
 
   //Output pwm
-  if (ch3_power < 10) {
+  if (ch3_power < 10 || rollAngel >= 75 || pitchAngel >= 75) {
     analogWrite(motor1, 0);
     analogWrite(motor2, 0);
     analogWrite(motor3, 0);
@@ -985,8 +1029,8 @@ void mpu6050Dmp() {
 
       //readDataFromESP01(); // read data from ESP
       callPID();
-      //ledStatus(300);
-      digitalWrite(LED_PIN, HIGH);
+      ledStatus(400);
+      // digitalWrite(LED_PIN, HIGH);
 
     }
 
@@ -1036,6 +1080,39 @@ void mpu6050Dmp() {
     //rollAngel,pitchAngel;
     rollAngel = ypr[1] * 180 / M_PI;
     pitchAngel = ypr[2] * 180 / M_PI;
+
+    /*
+     * Get HMC5883 Data for Yaw
+     */
+    /* Get a new sensor event */
+    sensors_event_t event;
+    mag.getEvent(&event);
+    // Hold the module so that Z is pointing 'up' and you can measure the heading with x&y
+    // Calculate heading when the magnetometer is level, then correct for signs of axis.
+    heading = atan2(event.magnetic.y, event.magnetic.x);
+    // Once you have your heading, you must then add your 'Declination Angle', which is the 'Error' of the magnetic field in your location.
+    // Find yours here: http://www.magnetic-declination.com/
+    // Mine is: -13* 2' W, which is ~13 Degrees, or (which we need) 0.22 radians
+    // If you cannot find your Declination, comment out these two lines, your compass will be slightly off.
+
+    heading += declinationAngle;
+
+    // Correct for when signs are reversed.
+    if (heading < 0)
+      heading += 2 * PI;
+
+    // Check for wrap due to addition of declination.
+    if (heading > 2 * PI)
+      heading -= 2 * PI;
+
+    // Convert radians to degrees for readability.
+    headingDegrees = heading * 180 / M_PI;  //<<<<<<<<<<<< Output  headingDegrees 0 - 359.99
+
+
+    /*
+     * End Get HMC5883 Data for Yaw
+     */
+
     /* Serial.print("ypr\t  yaw ");
      Serial.print(ypr[0] * 180/M_PI);
      Serial.print("\t  roll   ");
@@ -1043,12 +1120,64 @@ void mpu6050Dmp() {
      Serial.print("\t pitch  ");
      Serial.println(pitchAngel);
      //
+
     */
+    /*
+    // incress PID roll when Drone more angel
+    if (rollAngel > 35) {
+
+      rollsR.SetTunings(1.6 , 0, 0.6);
+    } else {
+      rollsR.SetTunings(0.8, 0, 0.3);
+    }
+
+    if (rollAngel < -35) {
+
+      rolls.SetTunings(1.6 , 0, 0.6);
+    } else {
+      rolls.SetTunings(0.8, 0, 0.3);
+    }
+    // end incress PID roll
+
+     // incress PID pitch when Drone more angel
+    if (pitchAngel > 35) {
+
+      pichtsR.SetTunings(1.6 , 0, 0.6);
+    } else {
+      pichtsR.SetTunings(0.8, 0, 0.3);
+    }
+
+    if (pitchAngel < -35) {
+
+      pichts.SetTunings(1.6 , 0, 0.6);
+    } else {
+      pichts.SetTunings(0.8, 0, 0.3);
+    }
+    // end incress PID pitch
+    */
+
     InputRoll =  rollAngel;
     InputPicht = pitchAngel;
-    InputYaw = ypr[0] * 180 / M_PI;
 
-    SetpointY += (ch4_yaw - 126) * 0.1f * 0.021f;
+    //convertHeadingDegree();
+    /* if (headingDegrees < 1  || headingDegrees > 358.5) {
+       //Serial.println("        revers PID yaw   ");
+       yaws.SetMode(MANUAL);
+       yawsR.SetMode(MANUAL);
+     } else {
+       yawsR.SetMode(AUTOMATIC);
+       yaws.SetMode(AUTOMATIC);
+     }
+    */
+    InputYaw =  headingDegrees;//outputYawSetpoint
+    //InputYaw = outputYawSetpoint;
+
+    if (ch4_yaw > 129 || ch4_yaw < 123) {
+      SetpointY = headingDegrees;
+      //SetpointY = outputYawSetpoint;
+    }
+
+    // SetpointY += (ch4_yaw - 126) * 0.1f * 0.021f;
     //
     /*
      * call PID
@@ -1076,8 +1205,13 @@ void mpu6050Dmp() {
         rollsR.SetMode(AUTOMATIC);
         pichtsR.SetMode(AUTOMATIC);
         yawsR.SetMode(AUTOMATIC);
+
+        SetpointY = headingDegrees;
+        //SetpointY = outputYawSetpoint;
         caribate = true;
       }
+    } else { // wait for MPU6050 set angle
+      ledStatus(1500);
     }
 
   }
@@ -1113,11 +1247,23 @@ void callPID() {
 
       //sum PID
 
+      if (headingDegrees > 1  || headingDegrees < 358.5) {// normall
+        m1 = (ch3_power *  1) + OutputRoll - OutputRollR + OutputPichtR - OutputPicht - OutputYaw + OutputYawR;
+        m2 = (ch3_power *  1) + OutputRollR - OutputRoll + OutputPichtR - OutputPicht + OutputYaw - OutputYawR;
+        m3 = (ch3_power * 1) + OutputRoll - OutputRollR + OutputPicht - OutputPichtR + OutputYaw - OutputYawR;
+        m4 = (ch3_power * 1)  + OutputRollR - OutputRoll + OutputPicht - OutputPichtR - OutputYaw + OutputYawR;
 
-      m1 = (ch3_power *  gainYaw14) + OutputRoll - OutputRollR + OutputPichtR - OutputPicht /*+ OutputYaw - OutputYawR*/;
-      m2 = (ch3_power *  gainYaw23) + OutputRollR - OutputRoll + OutputPichtR - OutputPicht /*- OutputYaw + OutputYawR*/;
-      m3 = ((ch3_power * 0.75) *  gainYaw23) + OutputRoll - OutputRollR + OutputPicht - OutputPichtR /*- OutputYaw + OutputYawR*/;
-      m4 = ((ch3_power * 0.70) *  gainYaw14 )  + OutputRollR - OutputRoll + OutputPicht - OutputPichtR /*+ OutputYaw - OutputYawR*/;
+      }
+
+      if (headingDegrees < 1  || headingDegrees > 358.5) {// daed angel (North) 0' 359'  remove yaw
+        m1 = (ch3_power *  1) + OutputRoll - OutputRollR + OutputPichtR - OutputPicht /*- OutputYaw + OutputYawR*/;
+        m2 = (ch3_power *  1) + OutputRollR - OutputRoll + OutputPichtR - OutputPicht /*+ OutputYaw - OutputYawR*/;
+        m3 = (ch3_power * 1) + OutputRoll - OutputRollR + OutputPicht - OutputPichtR /*+ OutputYaw - OutputYawR*/;
+        m4 = (ch3_power * 1)  + OutputRollR - OutputRoll + OutputPicht - OutputPichtR /*- OutputYaw + OutputYawR*/;
+
+        //>>>>>>>>>>>>>>>>>>>>>>>>
+        SetpointY = headingDegrees;
+      }
 
       //Drones move left 13up use PID rolls
       // m1 +=  OutputRoll;
@@ -1177,9 +1323,13 @@ void callPID() {
       // send  m1 m2 m3 m4 value to Motor drive for fix drones to stable
       if (checkBattery()) {
         driveMotor(m1, m2, m3, m4);
-      }else{
-        ch3_power -= 100;
+      } else {
+        ch3_power -= 30;
+        if (ch3_power < 1) {
+          ch3_power = 0;
+        }
         driveMotor(m1, m2, m3, m4);
+        ledStatus(90);
       }
 
 
@@ -1217,12 +1367,17 @@ void callPID() {
 
 void ledStatus(int timeBlink) {
   //timeLED13
-  if (times - timeLED13 > timeBlink) {
+  if ((millis() - timeLED13) >= timeBlink) {
     //blinkState = !blinkState;
-    timeLED13 = times;
-    digitalWrite(LED_PIN, HIGH);
-  } else {
-    digitalWrite(LED_PIN, LOW);
+    timeLED13 = millis();
+    // if the LED is off turn it on and vice-versa:
+    if (ledState == LOW)
+      ledState = HIGH;
+    else
+      ledState = LOW;
+
+    // set the LED with the ledState of the variable:
+    digitalWrite(13, ledState);
   }
 }
 
@@ -1240,3 +1395,22 @@ boolean checkBattery() {
 }
 // end funion for check batt low V cut off
 
+// Function for convert 0' - 360'   to  0 --- 100 ----0 ----100 ---- 0 ---- nifinitry
+void convertHeadingDegree() {
+  //outputYawSetpoint
+  outputYawSetpoint = (M_PI / 180) * (headingDegrees / 2);
+  outputYawSetpoint = (sin( outputYawSetpoint)) * 180;//use outputYawSetpoint instead headingdegree
+
+  if ((headingDegrees / 2) > 90) {
+    //Serial.println("        revers PID yaw   ");
+    yaws.SetControllerDirection(REVERSE);
+    yawsR.SetControllerDirection(DIRECT);
+  }
+  if ((headingDegrees / 2) < 90) {
+    // Serial.println("        normal PID  yaw ");
+    yawsR.SetControllerDirection(REVERSE);
+    yaws.SetControllerDirection(DIRECT);
+
+  }
+}
+//  End  // Function for convert 0' - 360'   to  0 --- 100

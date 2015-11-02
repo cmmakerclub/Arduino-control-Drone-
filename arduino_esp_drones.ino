@@ -1,139 +1,11 @@
 #include<Wire.h>
 #include <PID_v1.h>
-#include <Adafruit_Sensor.h>
-#include <Adafruit_HMC5883_U.h>
-
-// I2Cdev and MPU6050 must be installed as libraries, or else the .cpp/.h files
-// for both classes must be in the include path of your project
-#include "I2Cdev.h"
-
-#include "MPU6050_6Axis_MotionApps20.h"
-//#include "MPU6050.h" // not necessary if using MotionApps include file
-
-// Arduino Wire library is required if I2Cdev I2CDEV_ARDUINO_WIRE implementation
-// is used in I2Cdev.h
-#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-#include "Wire.h"
-#endif
-
-// class default I2C address is 0x68
-// specific I2C addresses may be passed as a parameter here
-// AD0 low = 0x68 (default for SparkFun breakout and InvenSense evaluation board)
-// AD0 high = 0x69
-MPU6050 mpu;
-//MPU6050 mpu(0x69); // <-- use for AD0 high
-
-/* =========================================================================
-   NOTE: In addition to connection 3.3v, GND, SDA, and SCL, this sketch
-   depends on the MPU-6050's INT pin being connected to the Arduino's
-   external interrupt #0 pin. On the Arduino Uno and Mega 2560, this is
-   digital I/O pin 2.
- * ========================================================================= */
-
-/* =========================================================================
-   NOTE: Arduino v1.0.1 with the Leonardo board generates a compile error
-   when using Serial.write(buf, len). The Teapot output uses this method.
-   The solution requires a modification to the Arduino USBAPI.h file, which
-   is fortunately simple, but annoying. This will be fixed in the next IDE
-   release. For more info, see these links:
-
-   http://arduino.cc/forum/index.php/topic,109987.0.html
-   http://code.google.com/p/arduino/issues/detail?id=958
- * ========================================================================= */
-#define LED_PIN 13 // (Arduino is 13, Teensy is 11, Teensy++ is 6)
-bool blinkState = false;
-
-// MPU control/status vars
-bool dmpReady = false;  // set true if DMP init was successful
-uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
-uint8_t devStatus;      // return status after each device operation (0 = success, !0 = error)
-uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
-uint16_t fifoCount;     // count of all bytes currently in FIFO
-uint8_t fifoBuffer[64]; // FIFO storage buffer
-
-// orientation/motion vars
-Quaternion q;           // [w, x, y, z]         quaternion container
-VectorInt16 aa;         // [x, y, z]            accel sensor measurements
-VectorInt16 aaReal;     // [x, y, z]            gravity-free accel sensor measurements
-VectorInt16 aaWorld;    // [x, y, z]            world-frame accel sensor measurements
-VectorFloat gravity;    // [x, y, z]            gravity vector
-float euler[3];         // [psi, theta, phi]    Euler angle container
-float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
-
-float rollAngel, pitchAngel;
-
-// packet structure for InvenSense teapot demo
-uint8_t teapotPacket[14] = { '$', 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0x00, 0x00, '\r', '\n' };
+#include <Arduino.h>
+#include "config.h"
+#include "mpu6050.h"
+#include "ahrs_tin.h"
 
 
-
-// ================================================================
-// ===               INTERRUPT DETECTION ROUTINE                ===
-// ================================================================
-
-volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
-void dmpDataReady() {
-  mpuInterrupt = true;
-}
-/*
- *
- *             Set variable for HMC5883
- */
-float heading;
-float declinationAngle = 0.22;
-float headingDegrees;
-float outputYawSetpoint;
-
-/*
- *            End Set variable for HMC5883
- *
- */
-
-//--------MPU6050 _--------------
-/*roll arround Y--->
- * pitch arround X--->
- * -roll = left
- * -pitch = back
- *           top view
- *        _________________
- *        |              o|INT      ^
- *        |               |         |
- *        |               |         |
- *        |               |        forward
- *        |               |
- *        |               |
- *        |               |
- *        |               |
- *        _______________o_VCC
- *
- *
- *yaw spin right value-
- */
-//
-// set MPU6050 Variables
-/*#define ACCELEROMETER_SENSITIVITY 8192.0
-#define GYROSCOPE_SENSITIVITY 65.536
-//#define M_PI 3.14159265359
-#define dt 0.004 // 5ms sample rate
-
-const int MPU = 0x68; // I2C address of the MPU-6050
-int16_t AcX, AcY, AcZ, Tmp, GyX, GyY, GyZ;
-
-float ax, ay, az, gx, gy, gz, angle_x, angle_y;
-float pitch, roll, yaw, tempRoll, tempPitch, tempYaw;
-
-
-
-
-//int counts = 0;
-//unsigned long timer, sampling;
-*/
-// End set MPU6050 Variables
-
-// _------------- SET time state Variables
-
-//unsigned long times, time2, time3;
-// _-------------END  SET time state Variables
 
 
 // SET Variables to read data ESP
@@ -149,9 +21,10 @@ int ch1_Eleveltor, ch2_roll, ch3_power, ch4_yaw;
 //^^^^^^^^^^^^^^ Set var PID ^^^^^^^^^^^^^^^//
 //Define Variables we'll be connecting to
 double  SetpointP = 0, SetpointR = 0, SetpointY = 0;
-double rollKp = 0, rollKi = 0, rollKd = 0;
-int SampleTime  =  23;
-float rollPitchYawGain = 0.3;
+//double rollKp = 0, rollKi = 0, rollKd = 0;
+int SampleTime  =  24;
+//float rollPitchYawGain = 0.3;
+#define RPYGIAN 0.3
 
 double  InputRoll, OutputRoll, OutputRollR; // right <---> left
 //double InputRoll24, OutputRoll24;
@@ -162,8 +35,8 @@ double  InputPicht, OutputPicht, OutputPichtR; // forward <-----> back
 double  InputYaw, OutputYaw, OutputYawR; // spin left <------> right  !!!!!!!!!!!   high 14 for spin left
 //double InputYaw23, OutputYaw23; // !!!!!!!!!!!!!!   high  23 for spin right
 
-double  InputHower, OutputHower, SetpointHower = 9.82;//
-boolean h = true;
+//double  InputHower, OutputHower, SetpointHower = 9.82;//
+//boolean h = true;
 
 // Variables will change :
 int ledState = LOW;             // ledState used to set the LED
@@ -175,8 +48,13 @@ int ledState = LOW;             // ledState used to set the LED
 
 /*@@@@@@@@@@@@@@@@@@@@@@@@@@  Set var PWM   @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
 int motor1 = 3 , motor2 = 9 , motor3 = 10 , motor4 = 11;
-int valueM1, valueM2, valueM3, valueM4;
-int throttle;
+/*#define MOTOR1 3
+#define MOTOR2 9
+#define MOTOR3 10
+#define MOTOR4 11
+*/
+//int valueM1, valueM2, valueM3, valueM4;
+//int throttle;
 int m1, m2, m3, m4;
 //float gainYaw14, gainYaw23,eY,iX;
 /*
@@ -197,29 +75,31 @@ int m1, m2, m3, m4;
       m3                       m4
 */
 /*@@@@@@@@@@@@@@@@@@@@@@@@@ End set var PWM  @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@*/
-// kp 0.8,ki 0 ,kd 0.3//ch3_power * 0.6
 
-PID rolls  (&InputRoll,  &OutputRoll,  &SetpointR, 0.9 , 0, 0.35,   DIRECT); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
-PID pichts (&InputPicht, &OutputPicht, &SetpointP, 0.9, 0, 0.35,   DIRECT); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
-PID yaws   (&InputYaw,   &OutputYaw,   &SetpointY, 0.8, 0, 0.25, DIRECT); // spin right value degree +
+
+PID rolls  (&InputRoll,  &OutputRoll,  &SetpointR, 1.201 , 0, 0.19,   DIRECT); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
+PID pichts (&InputPicht, &OutputPicht, &SetpointP, 1.201 , 0, 0.19,   DIRECT); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
+PID yaws   (&InputYaw,   &OutputYaw,   &SetpointY, 2.998, 0, 0, DIRECT); // spin right value degree +
 //PID howers (&InputHower,   &OutputHower,   &SetpointHower, 1, 1, 1, DIRECT); // if az < setpoint  all motor up   and   az > setpoint all motor down
 
 //revers PID
-PID rollsR  (&InputRoll,  &OutputRollR,  &SetpointR, 0.9, 0, 0.35,   REVERSE); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
-PID pichtsR (&InputPicht, &OutputPichtR, &SetpointP, 0.9, 0, 0.35,  REVERSE); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
-PID yawsR   (&InputYaw,   &OutputYawR,   &SetpointY, 0.8, 0, 0.25, REVERSE); // if yaw < 0 23 up(Throttle + OutYaw) and if yaw > 0 14 up(Throttle + OutYaw)
+PID rollsR  (&InputRoll,  &OutputRollR,  &SetpointR, 1.201 , 0, 0.19,   REVERSE); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
+PID pichtsR (&InputPicht, &OutputPichtR, &SetpointP, 1.201 , 0, 0.19,  REVERSE); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
+PID yawsR   (&InputYaw,   &OutputYawR,   &SetpointY, 2.998, 0, 0, REVERSE); // if yaw < 0 23 up(Throttle + OutYaw) and if yaw > 0 14 up(Throttle + OutYaw)
 
-int countReadMPU = 0;
+//int countReadMPU = 0;
 
-float p = 0, r = 0 , y = 0, z = 0;
-boolean caribate = false, lostConnect = false;
+//float p = 0, r = 0 , y = 0, z = 0;
+boolean caribate = false;
+
+#define LED_PIN 13
 
 
 //set var multitask
-unsigned long times, timeDetect, timeReadMPU, timeLED13, timeLost, timePidRolls, timePidRollsR, timePidPitchs, timePidPitchsR, timeDriveMotor;
+unsigned long timeDetect, timeLED13, timePid; // timeLost, timePidRolls, timePidRollsR, timePidPitchs, timePidPitchsR, timeDriveMotor;
 //end set var multitask
-unsigned long timeA, timeB, timeC;
-int countAB = 0;
+///unsigned long timeA, timeB, timeC;
+//int countAB = 0;
 boolean battStates = false;
 int sensorValue = 0;        // value read from the pot
 
@@ -227,111 +107,29 @@ int sensorValue = 0;        // value read from the pot
  *
  *
  */
-/* Assign a unique ID to this sensor at the same time */
-Adafruit_HMC5883_Unified mag = Adafruit_HMC5883_Unified(12345);
+
 
 /*
  *
  */
 //
+
+float getAvg(float * buff, int size)
+{
+  float sum = 0.0;
+  for (int i = 0; i < size; i++)
+  {
+    sum += buff[i];
+  }
+  return sum / size;
+}
+
+
 void setup() {
   // put your setup code here, to run once:
-  /*
-   * set up HMC5883L
-   */
-
-  while (!mag.begin()) {
-    //wait for HMC5883 ok
-  }
-  /*
-   *
-   */
-
-  /*pinMode(13, OUTPUT);
-  // set MPU6050
-  // Wire.pins(0, 2);
-  Wire.begin();
-  Wire.beginTransmission(MPU);
-  Wire.write(0x6B);  // PWR_MGMT_1 register
-  Wire.write(0);     // set to zero (wakes up the MPU-6050)
-  Wire.endTransmission(true);
 
 
-  Serial.begin(9600);
-  // end set MPU6050
-  */
-
-  // join I2C bus (I2Cdev library doesn't do this automatically)
-#if I2CDEV_IMPLEMENTATION == I2CDEV_ARDUINO_WIRE
-  Wire.begin();
-  TWBR = 24; // 400kHz I2C clock (200kHz if CPU is 8MHz)
-#elif I2CDEV_IMPLEMENTATION == I2CDEV_BUILTIN_FASTWIRE
-  Fastwire::setup(400, true);
-#endif
-
-  // initialize serial communication
-  // (115200 chosen because it is required for Teapot Demo output, but it's
-  // really up to you depending on your project)
   Serial.begin(115200);
-  //while (!Serial); // wait for Leonardo enumeration, others continue immediately
-
-  // NOTE: 8MHz or slower host processors, like the Teensy @ 3.3v or Ardunio
-  // Pro Mini running at 3.3v, cannot handle this baud rate reliably due to
-  // the baud timing being too misaligned with processor ticks. You must use
-  // 38400 or slower in these cases, or use some kind of external separate
-  // crystal solution for the UART timer.
-
-  // initialize device
-  //Serial.println(F("Initializing I2C devices..."));
-  mpu.initialize();
-  mpu.testConnection();
-  /*
-      // verify connection
-      Serial.println(F("Testing device connections..."));
-      Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
-
-      // wait for ready
-      Serial.println(F("\nSend any character to begin DMP programming and demo: "));
-      while (Serial.available() && Serial.read()); // empty buffer
-      while (!Serial.available());                 // wait for data
-      while (Serial.available() && Serial.read()); // empty buffer again
-  */
-  // load and configure the DMP
-  // Serial.println(F("Initializing DMP..."));
-  devStatus = mpu.dmpInitialize();
-  mpu.setRate(9);
-  // supply your own gyro offsets here, scaled for min sensitivity
-  mpu.setXGyroOffset(220);
-  mpu.setYGyroOffset(76);
-  mpu.setZGyroOffset(-85);
-  mpu.setZAccelOffset(1788); // 1688 factory default for my test chip
-
-  // make sure it worked (returns 0 if so)
-  if (devStatus == 0) {
-    // turn on the DMP, now that it's ready
-    //Serial.println(F("Enabling DMP..."));
-    mpu.setDMPEnabled(true);
-
-    // enable Arduino interrupt detection
-    //Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
-    attachInterrupt(0, dmpDataReady, RISING);
-    mpuIntStatus = mpu.getIntStatus();
-
-    // set our DMP Ready flag so the main loop() function knows it's okay to use it
-    //Serial.println(F("DMP ready! Waiting for first interrupt..."));
-    dmpReady = true;
-
-    // get expected DMP packet size for later comparison
-    packetSize = mpu.dmpGetFIFOPacketSize();
-  } else {
-    // ERROR!
-    // 1 = initial memory load failed
-    // 2 = DMP configuration updates failed
-    // (if it's going to break, usually the code will be 1)
-    // Serial.print(F("DMP Initialization failed (code "));
-    //Serial.print(devStatus);
-    //Serial.println(F(")"));
-  }
 
   // configure LED for output
   pinMode(LED_PIN, OUTPUT);
@@ -381,7 +179,7 @@ void setup() {
 
   SetpointP = 0;
   SetpointR = 0;
-  SetpointY = 0;
+  //SetpointY = 0;
 
 
   // end set up PID
@@ -397,6 +195,48 @@ void setup() {
 
   */
 
+  /*
+   *
+   * Set read angle from MPU
+   */
+  Wire.begin();
+  delay(1);
+  mpu6050_initialize();
+  delay(1);
+  MagHMC5883Int();
+  delay(1);
+  digitalWrite(13, HIGH);
+  // baro.init(MS561101BA_ADDR_CSB_LOW);
+  // UltrasonicInt();
+  TWBR = ((F_CPU / 400000L) - 16) / 2; // change the I2C clock rate to 400kHz
+  delay(1);
+  for (uint8_t i = 0; i < 50; i++)
+  {
+    mpu6050_Gyro_Values();
+    mpu6050_Accel_Values();
+    Mag5883Read();
+    // UltrasonicRead();
+    // temperature = baro.getTemperature(MS561101BA_OSR_4096);
+    // presser = baro.getPressure(MS561101BA_OSR_4096);
+    // pushAvg(presser);
+    delay(20);
+  }
+  //Altitude_Ground = Altitude_baro/10.0;
+  //sea_press = presser + 0.11;//presser 1003.52
+  //Serial.print("presser ");Serial.println(sea_press);
+  digitalWrite(13, LOW);
+  sensor_Calibrate();//sensor.h
+  ahrs_initialize();//ahrs.h
+  setupFourthOrder();
+  //RC_Calibrate();//"multi_rxPPM2560.h"
+  //Serial.print("TK_Quadrotor_Run_Roop_100Hz"); Serial.println("\t");
+  sensorPreviousTime = micros();
+  previousTime = micros();
+
+  /*
+   * End read angle from MPU6050
+   */
+
 
 }
 
@@ -404,8 +244,8 @@ void loop() {
   // put your main code here, to run repeatedly:
 
   /*__________^^________________*/  /*###################################################  Main  loop   $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$*/
-  times = millis();
 
+  //times = millis();
 
   //$$$$$$$$$$$$  setup   &&&&&&&&&&&&&&&&&&&&&&&&
   // read MUP and caribate
@@ -419,357 +259,131 @@ void loop() {
   5. combination Output from PID and data from UDP. Throttle - PID Output!
   */
   //)))))))))))))))))))) caribate )))))))))))))))))))))))))))))))*/
-  //while (!caribate) {
+  /*
+   * read data from ESP01
+   */
+  readDataFromESP01();
+  /*
+   * End read data from ESP01
+   */
 
-  /* p = 0, r = 0 , y = 0, z = 0;
-   for (int i = 0; i < 100; i++) {
-     // if ((timesC1 - timesC2) >= 20 ) {
-     // timesC2 = timesC1;
+  Dt_sensor = micros() - sensorPreviousTime;///////////Roop sensor/////////
+  if (Dt_sensor <= 0)
+  {
+    Dt_sensor = 1001;
+  }
+  if (Dt_sensor >= 1000 && gyroSamples < 4) ////Collect 3 samples = 2760 us  && gyroSamples < 5  && gyroSamples < 5
+  {
+    sensorPreviousTime = micros();
+    mpu6050_readGyroSum();
+    mpu6050_readAccelSum();
+  }
+  Dt_roop = micros() - previousTime;// 100 Hz task loop (10 ms)  , 5000 = 0.02626 ms
+  if (Dt_roop <= 0)
+  {
+    Dt_roop = 10001;
+  }
+  if (Dt_roop >= 20000)
+  {
+    previousTime = micros();
+    //Serial.print("   Timestart  =  ");
+    //Serial.print(micros());
+    G_Dt = Dt_roop * 0.000001;
+    frameCounter++;
+    mpu6050_Get_accel();
+    mpu6050_Get_gyro();
+    ////////////////Moving Average Filters///////////////////////////
+    GyroXf = (GyroX + GyroX2) / 2.0;
+    GyroYf = (GyroY + GyroY2) / 2.0;
+    GyroZf = (GyroZ + GyroZ2) / 2.0;
+    GyroX2 = GyroX; GyroY2 = GyroY; GyroZ2 = GyroZ; //gyro Old1
+    ////////////////Low pass filter/////////////////////////////////
+    AccXf = AccX;
+    AccYf = AccY;
+    AccZf = AccZ;
+    //AccXf = AccXf + (AccX - AccXf)*15.6*G_Dt;//29.6 15.4  //Low pass filter ,smoothing factor  α := dt / (RC + dt)
+    //AccYf = AccYf + (AccY - AccYf)*15.6*G_Dt;//15.4
+    //AccZf = AccZf + (AccZ - AccZf)*15.6*G_Dt;//15.4
+    ///////////////////Filter FourthOrder ///////////////////////////////////////
+    Accel[XAXIS] = AccX;
+    Accel[YAXIS] = AccY;
+    Accel[ZAXIS] = AccZ;
+    for (int axis = XAXIS; axis <= ZAXIS; axis++) {
+      filteredAccel[axis] = computeFourthOrder(Accel[axis], &fourthOrder[axis]);//"ahrs_tin.h"
+    }
 
-     //clearValue();
-     readMPU();
-     complementaryFilter();
+    //AccXf = filteredAccel[XAXIS];
+    //AccYf = filteredAccel[YAXIS];
+    //AccZf = filteredAccel[ZAXIS];
+    //////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////
+    //ahrs_updateMARG(GyroXf, GyroYf, GyroZf, AccXf, AccYf, AccZf, c_magnetom_x, c_magnetom_y, c_magnetom_z, G_Dt);//quaternion ,direction cosine matrix ,Euler angles
+    ahrs_updateMARG(GyroXf, GyroYf, GyroZf, filteredAccel[XAXIS], filteredAccel[YAXIS], filteredAccel[ZAXIS], c_magnetom_x, c_magnetom_y, c_magnetom_z, G_Dt);
+    //x_angle = x_angle + (GyroXf*RAD_TO_DEG*G_Dt);
+    //x_angle = kalmanCalculateX(ahrs_r*RAD_TO_DEG, GyroX*RAD_TO_DEG, G_Dt);
+    //y_angle = kalmanCalculateY(ahrs_p*RAD_TO_DEG, GyroY*RAD_TO_DEG, G_Dt);
+    /*Serial.print(" ahrs_y =  "); //Heading
+    Serial.print(ahrs_y);
+    Serial.print("   ahrs_p =  ");
+    Serial.print(ahrs_p);
+    Serial.print("   ahrs_r =  ");
+    Serial.print(ahrs_r);
+    Serial.print("   Heading  =  ");
+    Serial.println(Heading);
+    */
+    //send value angle to PID
+    InputRoll =  ahrs_p;
+    InputPicht = ahrs_r;
 
-     p += pitch;
-     r += roll;
-     y += yaw ;
-     z += (az / 16384);
-     digitalWrite(13, HIGH);
-     delay(4);
-     // }
-   }//end for
-  */
 
-  // digitalWrite(13, HIGH);
-  //mpu6050Dmp();
+    InputYaw =  Heading;
 
-  /*if (SetpointP > 5 || SetpointP < -5 || SetpointR > 5 || SetpointR < -5 ) { // Drones not stable try to caribate again.
-    caribate = false;
+    // waite for read angle stable
+    // blink LED to indicate activity
+    if (ahrs_r < 3  && ahrs_r > -3  && ahrs_p < 3 && ahrs_p > -3 ) {
+      //caribate = true;
+      //call led
 
-    rolls.SetMode(MANUAL);
-    pichts.SetMode(MANUAL);
-    yaws.SetMode(MANUAL);
 
-    rollsR.SetMode(MANUAL);
-    pichtsR.SetMode(MANUAL);
-    yawsR.SetMode(MANUAL);
+      if (!caribate) {
+        rolls.SetMode(AUTOMATIC);
+        pichts.SetMode(AUTOMATIC);
+        yaws.SetMode(AUTOMATIC);
 
-  } else {
+        rollsR.SetMode(AUTOMATIC);
+        pichtsR.SetMode(AUTOMATIC);
+        yawsR.SetMode(AUTOMATIC);
 
-    digitalWrite(13, LOW);
-    caribate = true;// get out caribate
-    if (ch3_power > 10) {
-      rolls.SetMode(AUTOMATIC);
-      pichts.SetMode(AUTOMATIC);
-      yaws.SetMode(AUTOMATIC);
+        SetpointY = Heading;
+        //SetpointY = outputYawSetpoint;
+        caribate = true;
+      }
+    } else { // wait for MPU6050 set angle
+      ledStatus(1500);
+    }
+    //Serial.print("   TimestartPID  =  ");
+    //Serial.println(micros());
+    if (caribate) {// call PID
+      callPID();
+      //digitalWrite(13, HIGH);
+      ledStatus(500);
+    }
 
-      rollsR.SetMode(AUTOMATIC);
-      pichtsR.SetMode(AUTOMATIC);
-      yawsR.SetMode(AUTOMATIC);
+  }// end tack 10ms
+
+  /*if(( micros() - timePid) >= 18000){// task 17ms
+    timePid =  micros();
+     if (caribate) {// call PID
+      callPID();
+      //digitalWrite(13, HIGH);
+      ledStatus(500);
     }
   }*/
-  /*
-  // blink LED to indicate activity
-  if (pitchAngel < 3  && pitchAngel > -3  && rollAngel < 3 && rollAngel > -3) { // Drones stable
-
-
-    //if (ch3_power > 10) {
-    rolls.SetMode(AUTOMATIC);
-    pichts.SetMode(AUTOMATIC);
-    yaws.SetMode(AUTOMATIC);
-
-    rollsR.SetMode(AUTOMATIC);
-    pichtsR.SetMode(AUTOMATIC);
-    yawsR.SetMode(AUTOMATIC);
-
-    SetpointP = 0;
-    SetpointR = 0;
-    SetpointY = 0;
-    SetpointHower = 0;
-    //digitalWrite(13, LOW);
-    caribate = true;// get out caribate
-    //}
-
-  } else {
-    rolls.SetMode(MANUAL);
-    pichts.SetMode(MANUAL);
-    yaws.SetMode(MANUAL);
-
-    rollsR.SetMode(MANUAL);
-    pichtsR.SetMode(MANUAL);
-    yawsR.SetMode(MANUAL);
-
-  }
-  */
-  // }// end while
-
-  /*
-  //(((((((((((((((((((((   end caribate ((((((((((((((((((((((((*/
-
-
-  // read data from Phone
-
-  //readDataFromESP01(); // read data from ESP
-  mpu6050Dmp();
-  //InputRoll =  rollAngel;
-  //InputPicht = pitchAngel;
-  // InputYaw = tempYaw / countReadMPU;
-
-  // End read data from Phone
-
-  // read MPU6050 timeReadMPU
-  /*if ((times - timeReadMPU) >= 4) {//  ++++++++++++++++++++++++++++++++     read MPU data every 5ms
-    timeReadMPU = times;
-    countReadMPU++;
-
-    //clearValue();
-
-    readMPU();
-    complementaryFilter();// read data MPU6050 and fitter data from MPU6050
-
-    tempRoll += roll;
-    tempPitch += pitch;
-    tempYaw += yaw;
-    //InputRoll = roll;
-    //InputPicht = pitch;
-    //InputYaw = yaw;
-
-  }*///    End of read MPU data
-  /*
-   *
-   *
-   */
-
-  /*
-   *
-   *
-   *timePidRolls,timePidRollsR,timePidPitchs,timePidPitchsR;
-   */
-
-  // if ((times - timePidRolls) >= 15 ) {//PID sampleing time = 15ms
-  //timePidRolls = times;
-
-  /*InputRoll =  tempRoll / countReadMPU;
-  InputPicht = tempPitch / countReadMPU;
-  InputYaw = tempYaw / countReadMPU;
-  countReadMPU = 0;
-  tempRoll = 0;
-  tempPitch = 0;
-  tempYaw = 0;
-  */
-  //>>>>>>>>>>>>   call PID to work
-  //if (rolls.Compute() && pichts.Compute() && rollsR.Compute() && pichtsR.Compute() /*&& yaws.Compute() && yawsR.Compute()*/) {
-
-
-
-  //sum PID
-
-
-  // m1 = (ch3_power * 0.4) + OutputRoll - OutputRollR;
-  // m2 = (ch3_power * 0.4) + OutputRollR - OutputRoll ;
-  // m3 = (ch3_power * 0.4) + OutputRoll - OutputRollR ;
-  // m4 = (ch3_power * 0.4)  + OutputRollR - OutputRoll ;
-
-  //Drones move left 13up use PID rolls
-  // m1 +=  OutputRoll;
-  //m3 +=  OutputRoll;
-
-  /*
-   *
-  */
-
-  //Drones move right 24up use PID rollsR
-  //m2 +=  OutputRollR;
-  // m4 +=  OutputRollR;
-
-  /*
-   *
-   *
-   */
-  /*
-     *
-     */
-
-  //Drones move forward use PID pitchsR 12 up
-  // m1 +=  OutputPichtR;
-  //m2 +=  OutputPichtR;
-
-
-  /*
-   *
-   *
-   */
-
-  //// Drones move back use PID pitchs 34 up
-  // m3 +=  OutputPicht;
-  // m4 +=  OutputPicht;
-
-
-  /*
-   *
-   *
-   */
-  // Drones spin right fix by PID yaws 14up for spin left
-
-  //m1 += OutputYaw;
-  //m4 += OutputYaw;
-  /*
-   *
-   *
-   */
-  // Drones spin left fix by PID yawsR 23up for spin right
-  //m2 += OutputYawR;
-  //m3 += OutputYawR;
-
-  /*
-   *
-   *
-   */
-  // send  m1 m2 m3 m4 value to Motor drive for fix drones to stable
-
-  // driveMotor(m1, m2, m3, m4);
-
-  /* rollKp = rollKp + (ch3_power * 0.05);
-  // rollKi = rollKi + (ch3_power * 0.005);
-   rollKd = rollKd + (ch3_power * 0.0025);
-   rolls.SetTunings(rollKp, rollKi, rollKd);
-   rollsR.SetTunings(rollKp, rollKi, rollKd);
-
-   rollKp = 0.1;
-   rollKi = 0;
-   rollKd = 0;
-   */
-  /*if ((times - timeLED13) >= 1000) {
-    timeLED13 = times;
-    digitalWrite(13, HIGH);
-  } else {
-    digitalWrite(13, LOW);
-  }
-  */
-  /* Blink LED to show work in PID loop
-  *
-  *
-  */
-
-
-  /*
-   *
-   *
-   */
-
-  // }
-  //}//************ End of //PID rolls sampleing time = 20ms  ***************
-
-
-  /*
-   *
-   *
-   */
-
-
-  /*
-   *
-   *
-   */
-
-
-
 
 
 }//+++++++++++++++++++++++++++++++++++++++++++++++++  End void loop()  ++++++++++++++++++++<<<<<<<<<<<<<<
 
-/*
-// funtion for Filter data from MPU6050 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-void complementaryFilter() {
-  float pitchAcc, rollAcc;
-  //Integeate the gyroscope data -> int(angularSpeed) = angle
-  pitch += (gx / GYROSCOPE_SENSITIVITY) * dt; //Angle around the X-axis
-  roll -= (gy / GYROSCOPE_SENSITIVITY) * dt; //Angle around the Y-axis
-  //yaw += (gy / GYROSCOPE_SENSITIVITY) * dt;
 
-  //Compensate for drift with accelerometer data if !bullshit
-  //Sensitivity MPU = -2 to  2G = 32768 0.5G = 8192
-  int forceMagnitudeApprox = abs(ax) + abs(ay) + abs(az);
-  if (forceMagnitudeApprox > 8192 && forceMagnitudeApprox < 32768 ) {
-    //Turning around the X axis results in a vector on the Y-axis
-    pitchAcc = atan2f(ay, az) * 180 / 3.14159265359;
-    pitch = (pitch * 0.98) + pitchAcc  * 0.02;
-
-    // Turning around the Y axis results in vector on the X-axis
-    rollAcc = atan2f(ax, az) * 180 / M_PI;
-    roll = (roll * 0.98) + rollAcc  * 0.02;
-
-
-    yaw = gz / 131;
-
-  }
-
-}
-
-//end funtion for Filter data from MPU6050
-
-
-
-// funtion clear  value %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-void clearValue() {
-  //Clear
-  ax = 0;
-  ay = 0;
-  az = 0;
-
-
-
-  gx = 0;
-  gy = 0;
-  gz = 0;
-
-  pitch = 0;
-  roll = 0;
-  yaw = 0;
-
-  //
-}
-
-// end funtion clear  value
-
-
-
-//  funtion read data from MPU6050 &&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
-void readMPU() {
-  //for (int i = 0; i < 10; i++) {
-  Wire.beginTransmission(MPU);
-  Wire.write(0x3B);  // starting with register 0x3B (ACCEL_XOUT_H)
-  Wire.endTransmission(false);
-  Wire.requestFrom(MPU, 14, true); // request a total of 14 registers
-  AcX = Wire.read() << 8 | Wire.read(); // 0x3B (ACCEL_XOUT_H) & 0x3C (ACCEL_XOUT_L)
-  AcY = Wire.read() << 8 | Wire.read(); // 0x3D (ACCEL_YOUT_H) & 0x3E (ACCEL_YOUT_L)
-  AcZ = Wire.read() << 8 | Wire.read(); // 0x3F (ACCEL_ZOUT_H) & 0x40 (ACCEL_ZOUT_L)
-  Tmp = Wire.read() << 8 | Wire.read(); // 0x41 (TEMP_OUT_H) & 0x42 (TEMP_OUT_L)
-  GyX = Wire.read() << 8 | Wire.read(); // 0x43 (GYRO_XOUT_H) & 0x44 (GYRO_XOUT_L)
-  GyY = Wire.read() << 8 | Wire.read(); // 0x45 (GYRO_YOUT_H) & 0x46 (GYRO_YOUT_L)
-  GyZ = Wire.read() << 8 | Wire.read(); // 0x47 (GYRO_ZOUT_H) & 0x48 (GYRO_ZOUT_L)
-
-  ax = AcX;
-  ay = AcY;
-  az = AcZ;
-
-  gx = GyX;
-  gy = GyY;
-  gz = GyZ;
-
-  ax = ax - 1360;
-  //ay = ay + 20;
-  //az = az + AcZ;
-
-  gx = gx - (-403.31);
-  gy = gy - (101.14);
-  gz = gz - (-95.88);
-
-}
-
-
-// end funtion read data from MPU6050
-*/
 
 //Keep data from RX ESP01  serialEvent
 /*
@@ -805,7 +419,7 @@ void readDataFromESP01() {
 
     if (inputString.length() > 0) {
       b = inputString;
-      lostConnect = false;
+      //lostConnect = false;
       //String dataSends =  "a"+Integer.toString(ch1_ele)+"b"+Integer.toString(ch2_roll)+"c"+Integer.toString(ch3_power)+"d"+Integer.toString(ch4_yaw)
       //+"p"+Integer.toString(kpSend)+"i"+Integer.toString(kiSend)+"k"+Integer.toString(kdSend)+"!";
       ch1_Eleveltor = b.substring((b.indexOf('a') + 1), b.indexOf('b')).toInt();
@@ -814,27 +428,27 @@ void readDataFromESP01() {
       //ch3_power = ch3_power*0.4;
       ch4_yaw = b.substring((b.indexOf('d') + 1), b.indexOf('p')).toInt();
       //
+      /*
+      rollKp = b.substring((b.indexOf('p') + 1), b.indexOf('i')).toInt();
+      rollKi = b.substring((b.indexOf('i') + 1), b.indexOf('k')).toInt();
+      rollKd = b.substring((b.indexOf('k') + 1), b.indexOf('!')).toInt();
 
-      /* rollKp = b.substring((b.indexOf('p') + 1), b.indexOf('i')).toInt();
-       rollKi = b.substring((b.indexOf('i') + 1), b.indexOf('k')).toInt();
-       rollKd = b.substring((b.indexOf('k') + 1), b.indexOf('!')).toInt();
+      rollKp = rollKp / 10;
+      rollKi = rollKi / 10;
+      rollKd = rollKd / 10;
 
-       rollKp = rollKp / 10;
-       rollKi = rollKi / 10;
-       rollKd = rollKd / 10;
-       */
       //
       // gainYaw14,gainYaw23
 
-      //rolls.SetTunings(rollKp , rollKi, rollKd);
-      //rollsR.SetTunings(rollKp, rollKi, rollKd);
-
+      yaws.SetTunings(rollKp , rollKi, rollKd);
+      yawsR.SetTunings(rollKp, rollKi, rollKd);
+      */
 
       // clear the string:
       inputString = "";
       //countC = 0;
       stringComplete = false;
-      timeDetect = times;
+      timeDetect = Dt_sensor;
 
     }
 
@@ -842,12 +456,12 @@ void readDataFromESP01() {
 
 
   } else {
-    if (times - timeDetect > 500 ) {
-      timeDetect = times;
+    if (Dt_sensor - timeDetect > 500000 ) {
+      timeDetect = Dt_sensor;
       //stop motor when no data
       ch3_power -= 10;
-      lostConnect = true;
-
+      // lostConnect = true;
+      ///
     }
   }
 
@@ -868,45 +482,26 @@ void driveMotor(int outputPID1, int outputPID2, int outputPID3, int outputPID4) 
 
 
 
-  //claer value
-  valueM1 =  0;
-  valueM2 =  0;
-  valueM3 =  0;
-  valueM4 =  0;
-
-
-
-
-
-  //
-  //throttle = ch3_power * 0.35 ; //
-  // fix pwm output by PID
-
-  valueM1 =  outputPID1;
-  valueM2 =  outputPID2;
-  valueM3 =  outputPID3;
-  valueM4 =  outputPID4;
-  //
 
   //input ch2_roll
   if (ch2_roll > 126) { //13 up for move right
 
 
-    valueM1 +=  (ch2_roll - 126) * rollPitchYawGain;
-    valueM3 +=  (ch2_roll - 126) * rollPitchYawGain;
+    outputPID1 +=  (ch2_roll - 126) * RPYGIAN;
+    outputPID3 +=  (ch2_roll - 126) * RPYGIAN;
 
-    valueM2 -=  (ch2_roll - 126) * rollPitchYawGain;
-    valueM4 -=  (ch2_roll - 126) * rollPitchYawGain;
+    outputPID2 -=  (ch2_roll - 126) * RPYGIAN;
+    outputPID4 -=  (ch2_roll - 126) * RPYGIAN;
 
   }
   if (ch2_roll < 126) { //24 up for move left
 
 
-    valueM2 +=  (126 - ch2_roll) * rollPitchYawGain;
-    valueM4 +=  (126 - ch2_roll) * rollPitchYawGain;
+    outputPID2 +=  (126 - ch2_roll) * RPYGIAN;
+    outputPID4 +=  (126 - ch2_roll) * RPYGIAN;
 
-    valueM1 -=  (126 - ch2_roll) * rollPitchYawGain;
-    valueM3 -=  (126 - ch2_roll) * rollPitchYawGain;
+    outputPID1 -=  (126 - ch2_roll) * RPYGIAN;
+    outputPID3 -=  (126 - ch2_roll) * RPYGIAN;
 
 
   }
@@ -918,18 +513,18 @@ void driveMotor(int outputPID1, int outputPID2, int outputPID3, int outputPID4) 
 
 
 
-    valueM3 +=  (ch1_Eleveltor - 126) * rollPitchYawGain;
-    valueM4 +=  (ch1_Eleveltor - 126) * rollPitchYawGain;
+    outputPID3 +=  (ch1_Eleveltor - 126) * RPYGIAN;
+    outputPID4 +=  (ch1_Eleveltor - 126) * RPYGIAN;
 
-    valueM1 -=  (ch1_Eleveltor - 126) * rollPitchYawGain;
-    valueM2 -=  (ch1_Eleveltor - 126) * rollPitchYawGain;
+    outputPID1 -=  (ch1_Eleveltor - 126) * RPYGIAN;
+    outputPID2 -=  (ch1_Eleveltor - 126) * RPYGIAN;
   }
   if (ch1_Eleveltor < 126) { // 12up for move back
-    valueM1 +=  (126 - ch1_Eleveltor) * rollPitchYawGain;
-    valueM2 +=  (126 - ch1_Eleveltor) * rollPitchYawGain;
+    outputPID1 +=  (126 - ch1_Eleveltor) * RPYGIAN;
+    outputPID2 +=  (126 - ch1_Eleveltor) * RPYGIAN;
 
-    valueM3 -=  (126 - ch1_Eleveltor) * rollPitchYawGain;
-    valueM4 -=  (126 - ch1_Eleveltor) * rollPitchYawGain;
+    outputPID3 -=  (126 - ch1_Eleveltor) * RPYGIAN;
+    outputPID4 -=  (126 - ch1_Eleveltor) * RPYGIAN;
 
   }
 
@@ -937,55 +532,55 @@ void driveMotor(int outputPID1, int outputPID2, int outputPID3, int outputPID4) 
 
   // input ch4_yaw
   if (ch4_yaw > 126) { // 23up for spin right
-    valueM2 += (ch4_yaw - 126) * rollPitchYawGain;
-    valueM3 += (ch4_yaw - 126) * rollPitchYawGain;
+    outputPID2 += (ch4_yaw - 126) * RPYGIAN;
+    outputPID3 += (ch4_yaw - 126) * RPYGIAN;
     //
-    valueM1 -= (ch4_yaw - 126) * rollPitchYawGain;
-    valueM4 -= (ch4_yaw - 126) * rollPitchYawGain;
+    outputPID1 -= (ch4_yaw - 126) * RPYGIAN;
+    outputPID4 -= (ch4_yaw - 126) * RPYGIAN;
   }
   if (ch4_yaw < 126) { // 14up for spin left
-    valueM1 += (126 - ch4_yaw) * rollPitchYawGain;
-    valueM4 += (126 - ch4_yaw) * rollPitchYawGain;
+    outputPID1 += (126 - ch4_yaw) * RPYGIAN;
+    outputPID4 += (126 - ch4_yaw) * RPYGIAN;
 
-    valueM2 -= (126 - ch4_yaw) * rollPitchYawGain;
-    valueM3 -= (126 - ch4_yaw) * rollPitchYawGain;
+    outputPID2 -= (126 - ch4_yaw) * RPYGIAN;
+    outputPID3 -= (126 - ch4_yaw) * RPYGIAN;
 
   }
 
 
   //end input ch4_yaw
   //valueM3 = valueM3 * 0.9;
-  if (valueM1 > 255) {
-    valueM1 = 255;
+  if ( outputPID1 > 255) {
+    outputPID1 = 255;
   }
-  if (valueM1 < 0) {
-    valueM1 = 0;
-  }
-
-  if (valueM2 > 255) {
-    valueM2 = 255;
-  }
-  if (valueM2 < 0) {
-    valueM2 = 0;
+  if ( outputPID1 < 0) {
+    outputPID1 = 0;
   }
 
-  if (valueM3 > 255) {
-    valueM3 = 255;
+  if ( outputPID2 > 255) {
+    outputPID2 = 255;
   }
-  if (valueM3 < 0) {
-    valueM3 = 0;
+  if ( outputPID2 < 0) {
+    outputPID2 = 0;
   }
 
-  if (valueM4 > 255) {
-    valueM4 = 255;
+  if ( outputPID3 > 255) {
+    outputPID3 = 255;
   }
-  if (valueM4 < 0) {
-    valueM4 = 0;
+  if ( outputPID3 < 0) {
+    outputPID3 = 0;
+  }
+
+  if ( outputPID4 > 255) {
+    outputPID4 = 255;
+  }
+  if ( outputPID4 < 0) {
+    outputPID4 = 0;
   }
   // end fix pwm
 
   //Output pwm
-  if (ch3_power < 10 || rollAngel >= 75 || pitchAngel >= 75) {
+  if (ch3_power < 10 ) {
     analogWrite(motor1, 0);
     analogWrite(motor2, 0);
     analogWrite(motor3, 0);
@@ -994,181 +589,21 @@ void driveMotor(int outputPID1, int outputPID2, int outputPID3, int outputPID4) 
 
   } else {
 
-    analogWrite(motor1, valueM1);
-    analogWrite(motor2, valueM2);
-    analogWrite(motor3, valueM3);
-    analogWrite(motor4, valueM4);
+    analogWrite(motor1,  outputPID1);
+    analogWrite(motor2,  outputPID2);
+    analogWrite(motor3,  outputPID3);
+    analogWrite(motor4,  outputPID4);
   }
 }
 
 // >>>>>>>>>>>>>>>>>>>>>>   End function drive Motor  <<<<<<<<<<<<<<<
 
-// MPU6050 DMP
-void mpu6050Dmp() {
-  // if programming failed, don't try to do anything
-  if (!dmpReady) return;
 
-  // wait for MPU interrupt or extra packet(s) available
-  while (!mpuInterrupt && fifoCount < packetSize) {
-    // other program behavior stuff here
-    // .
-    // .
-    // .
-    // if you are really paranoid you can frequently test in between other
-    // stuff to see if mpuInterrupt is true, and if so, "break;" from the
-    // while() loop to immediately process the MPU data
-    // .
-    /*if (callPidWork) {
-      callPID();
-      ledStatus(100);
-      callPidWork = false;
-    }*/
-    // read data from Phone
-    readDataFromESP01(); // read data from ESP
-    if (caribate) {
-
-      //readDataFromESP01(); // read data from ESP
-      callPID();
-      ledStatus(400);
-      // digitalWrite(LED_PIN, HIGH);
-
-    }
-
-    // .
-    // .
-  }
-  /*
-    countAB++;
-    if (countAB == 1) {
-      timeA = millis();
-    }
-    if (countAB == 2) {
-      timeB = millis();
-      countAB = 0;
-      Serial.print("rate pid ms =  ");
-      Serial.println(timeC - timeA);
-    }
-    */
-  // reset interrupt flag and get INT_STATUS byte
-  mpuInterrupt = false;
-  mpuIntStatus = mpu.getIntStatus();
-
-  // get current FIFO count
-  fifoCount = mpu.getFIFOCount();
-
-  // check for overflow (this should never happen unless our code is too inefficient)
-  if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
-    // reset so we can continue cleanly
-    mpu.resetFIFO();
-    //Serial.println(F("FIFO overflow!"));
-
-    // otherwise, check for DMP data ready interrupt (this should happen frequently)
-  } else if (mpuIntStatus & 0x02) {
-    // wait for correct available data length, should be a VERY short wait
-    while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
-
-    // read a packet from FIFO
-    mpu.getFIFOBytes(fifoBuffer, packetSize);
-
-    // track FIFO count here in case there is > 1 packet available
-    // (this lets us immediately read more without waiting for an interrupt)
-    fifoCount -= packetSize;
-
-    mpu.dmpGetQuaternion(&q, fifoBuffer);
-    mpu.dmpGetGravity(&gravity, &q);
-    mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
-    //rollAngel,pitchAngel;
-    rollAngel = ypr[1] * 180 / M_PI;
-    pitchAngel = ypr[2] * 180 / M_PI;
-
-    /*
-     * Get HMC5883 Data for Yaw
-     */
-    /* Get a new sensor event */
-    sensors_event_t event;
-    mag.getEvent(&event);
-    // Hold the module so that Z is pointing 'up' and you can measure the heading with x&y
-    // Calculate heading when the magnetometer is level, then correct for signs of axis.
-    heading = atan2(event.magnetic.y, event.magnetic.x);
-    // Once you have your heading, you must then add your 'Declination Angle', which is the 'Error' of the magnetic field in your location.
-    // Find yours here: http://www.magnetic-declination.com/
-    // Mine is: -13* 2' W, which is ~13 Degrees, or (which we need) 0.22 radians
-    // If you cannot find your Declination, comment out these two lines, your compass will be slightly off.
-
-    heading += declinationAngle;
-
-    // Correct for when signs are reversed.
-    if (heading < 0)
-      heading += 2 * PI;
-
-    // Check for wrap due to addition of declination.
-    if (heading > 2 * PI)
-      heading -= 2 * PI;
-
-    // Convert radians to degrees for readability.
-    headingDegrees = heading * 180 / M_PI;  //<<<<<<<<<<<< Output  headingDegrees 0 - 359.99
-
-
-    /*
-     * End Get HMC5883 Data for Yaw
-     */
-
-    /* Serial.print("ypr\t  yaw ");
-     Serial.print(ypr[0] * 180/M_PI);
-     Serial.print("\t  roll   ");
-     Serial.print(rollAngel);
-     Serial.print("\t pitch  ");
-     Serial.println(pitchAngel);
-     //
-
-    */
-    /*
-    // incress PID roll when Drone more angel
-    if (rollAngel > 35) {
-
-      rollsR.SetTunings(1.6 , 0, 0.6);
-    } else {
-      rollsR.SetTunings(0.8, 0, 0.3);
-    }
-
-    if (rollAngel < -35) {
-
-      rolls.SetTunings(1.6 , 0, 0.6);
-    } else {
-      rolls.SetTunings(0.8, 0, 0.3);
-    }
-    // end incress PID roll
-
-     // incress PID pitch when Drone more angel
-    if (pitchAngel > 35) {
-
-      pichtsR.SetTunings(1.6 , 0, 0.6);
-    } else {
-      pichtsR.SetTunings(0.8, 0, 0.3);
-    }
-
-    if (pitchAngel < -35) {
-
-      pichts.SetTunings(1.6 , 0, 0.6);
-    } else {
-      pichts.SetTunings(0.8, 0, 0.3);
-    }
-    // end incress PID pitch
-    */
-
-    InputRoll =  rollAngel;
+/*
+  InputRoll =  rollAngel;
     InputPicht = pitchAngel;
 
-    //convertHeadingDegree();
-    /* if (headingDegrees < 1  || headingDegrees > 358.5) {
-       //Serial.println("        revers PID yaw   ");
-       yaws.SetMode(MANUAL);
-       yawsR.SetMode(MANUAL);
-     } else {
-       yawsR.SetMode(AUTOMATIC);
-       yaws.SetMode(AUTOMATIC);
-     }
-    */
+
     InputYaw =  headingDegrees;//outputYawSetpoint
     //InputYaw = outputYawSetpoint;
 
@@ -1176,193 +611,79 @@ void mpu6050Dmp() {
       SetpointY = headingDegrees;
       //SetpointY = outputYawSetpoint;
     }
-
-    // SetpointY += (ch4_yaw - 126) * 0.1f * 0.021f;
-    //
-    /*
-     * call PID
-     */
-    //callPidWork = true;
-    /*
-     *
-     *
-     */
-    /*if (countAB == 1) {
-     timeC =  millis();
+/*
+    if (countAB == 1) {
+     timeC =  micros();
     }
-    */
-    // blink LED to indicate activity
-    if (pitchAngel < 4  && pitchAngel > -4  && rollAngel < 4 && rollAngel > -4 ) {
-      //caribate = true;
-      //call led
+*/
+// blink LED to indicate activity
+/* if (pitchAngel < 4  && pitchAngel > -4  && rollAngel < 4 && rollAngel > -4 ) {
+   //caribate = true;
+   //call led
 
 
-      if (!caribate) {
-        rolls.SetMode(AUTOMATIC);
-        pichts.SetMode(AUTOMATIC);
-        yaws.SetMode(AUTOMATIC);
+   if (!caribate) {
+     rolls.SetMode(AUTOMATIC);
+     pichts.SetMode(AUTOMATIC);
+     yaws.SetMode(AUTOMATIC);
 
-        rollsR.SetMode(AUTOMATIC);
-        pichtsR.SetMode(AUTOMATIC);
-        yawsR.SetMode(AUTOMATIC);
+     rollsR.SetMode(AUTOMATIC);
+     pichtsR.SetMode(AUTOMATIC);
+     yawsR.SetMode(AUTOMATIC);
 
-        SetpointY = headingDegrees;
-        //SetpointY = outputYawSetpoint;
-        caribate = true;
+     SetpointY = headingDegrees;
+     //SetpointY = outputYawSetpoint;
+     caribate = true;
+   }
+ } else { // wait for MPU6050 set angle
+   ledStatus(1500);
+ }
+
+*/
+
+
+void callPID() {
+  //if ((millis() - timePidRolls) >= 25 ) {//PID sampleing time = 25ms
+  // timePidRolls = millis();
+
+  /*InputRoll =  tempRoll / countReadMPU;
+  InputPicht = tempPitch / countReadMPU;
+  InputYaw = tempYaw / countReadMPU;
+  countReadMPU = 0;
+  tempRoll = 0;
+  tempPitch = 0;
+  tempYaw = 0;
+  */
+  //>>>>>>>>>>>>   call PID to work
+  if (rolls.Compute() && pichts.Compute() && rollsR.Compute() && pichtsR.Compute() && yaws.Compute() && yawsR.Compute()) {
+
+
+
+    //sum PID
+
+    //if (headingDegrees > 1  || headingDegrees < 358.5) {// normall
+    m1 = (ch3_power *  0.85) + OutputRoll - OutputRollR + OutputPichtR - OutputPicht - OutputYaw + OutputYawR;
+    m2 = (ch3_power *  0.85) + OutputRollR - OutputRoll + OutputPichtR - OutputPicht + OutputYaw - OutputYawR;
+    m3 = (ch3_power * 0.85) + OutputRoll - OutputRollR + OutputPicht - OutputPichtR + OutputYaw - OutputYawR;
+    m4 = (ch3_power * 0.85)  + OutputRollR - OutputRoll + OutputPicht - OutputPichtR - OutputYaw + OutputYawR;
+
+
+    // send  m1 m2 m3 m4 value to Motor drive for fix drones to stable
+    if (checkBattery()) {
+      driveMotor(m1, m2, m3, m4);
+    } else {
+      ch3_power -= 30;
+      if (ch3_power < 1) {
+        ch3_power = 0;
       }
-    } else { // wait for MPU6050 set angle
-      ledStatus(1500);
+      driveMotor(m1, m2, m3, m4);
+      ledStatus(80);
     }
+
+
 
   }
-
-  /*if (!mpuInterrupt) {
-    rolls.SetMode(AUTOMATIC);
-    pichts.SetMode(AUTOMATIC);
-    yaws.SetMode(AUTOMATIC);
-
-    rollsR.SetMode(AUTOMATIC);
-    pichtsR.SetMode(AUTOMATIC);
-    yawsR.SetMode(AUTOMATIC);
-  }*/
-}
-
-//)))))))))))))))))))))))))))))
-void callPID() {
-  if ((times - timePidRolls) >= 23 ) {//PID sampleing time = 15ms
-    timePidRolls = times;
-
-    /*InputRoll =  tempRoll / countReadMPU;
-    InputPicht = tempPitch / countReadMPU;
-    InputYaw = tempYaw / countReadMPU;
-    countReadMPU = 0;
-    tempRoll = 0;
-    tempPitch = 0;
-    tempYaw = 0;
-    */
-    //>>>>>>>>>>>>   call PID to work
-    if (rolls.Compute() && pichts.Compute() && rollsR.Compute() && pichtsR.Compute() && yaws.Compute() && yawsR.Compute()) {
-
-
-
-      //sum PID
-
-      if (headingDegrees > 1  || headingDegrees < 358.5) {// normall
-        m1 = (ch3_power *  1) + OutputRoll - OutputRollR + OutputPichtR - OutputPicht - OutputYaw + OutputYawR;
-        m2 = (ch3_power *  1) + OutputRollR - OutputRoll + OutputPichtR - OutputPicht + OutputYaw - OutputYawR;
-        m3 = (ch3_power * 1) + OutputRoll - OutputRollR + OutputPicht - OutputPichtR + OutputYaw - OutputYawR;
-        m4 = (ch3_power * 1)  + OutputRollR - OutputRoll + OutputPicht - OutputPichtR - OutputYaw + OutputYawR;
-
-      }
-
-      if (headingDegrees < 1  || headingDegrees > 358.5) {// daed angel (North) 0' 359'  remove yaw
-        m1 = (ch3_power *  1) + OutputRoll - OutputRollR + OutputPichtR - OutputPicht /*- OutputYaw + OutputYawR*/;
-        m2 = (ch3_power *  1) + OutputRollR - OutputRoll + OutputPichtR - OutputPicht /*+ OutputYaw - OutputYawR*/;
-        m3 = (ch3_power * 1) + OutputRoll - OutputRollR + OutputPicht - OutputPichtR /*+ OutputYaw - OutputYawR*/;
-        m4 = (ch3_power * 1)  + OutputRollR - OutputRoll + OutputPicht - OutputPichtR /*- OutputYaw + OutputYawR*/;
-
-        //>>>>>>>>>>>>>>>>>>>>>>>>
-        SetpointY = headingDegrees;
-      }
-
-      //Drones move left 13up use PID rolls
-      // m1 +=  OutputRoll;
-      //m3 +=  OutputRoll;
-
-      /*
-       *
-      */
-
-      //Drones move right 24up use PID rollsR
-      //m2 +=  OutputRollR;
-      // m4 +=  OutputRollR;
-
-      /*
-       *
-       *
-       */
-      /*
-         *
-         */
-
-      //Drones move forward use PID pitchsR 12 up
-      // m1 +=  OutputPichtR;
-      //m2 +=  OutputPichtR;
-
-
-      /*
-       *
-       *
-       */
-
-      //// Drones move back use PID pitchs 34 up
-      // m3 +=  OutputPicht;
-      // m4 +=  OutputPicht;
-
-
-      /*
-       *
-       *
-       */
-      // Drones spin right fix by PID yaws 14up for spin left
-
-      //m1 += OutputYaw;
-      //m4 += OutputYaw;
-      /*
-       *
-       *
-       */
-      // Drones spin left fix by PID yawsR 23up for spin right
-      //m2 += OutputYawR;
-      //m3 += OutputYawR;
-
-      /*
-       *
-       *
-       */
-      // send  m1 m2 m3 m4 value to Motor drive for fix drones to stable
-      if (checkBattery()) {
-        driveMotor(m1, m2, m3, m4);
-      } else {
-        ch3_power -= 30;
-        if (ch3_power < 1) {
-          ch3_power = 0;
-        }
-        driveMotor(m1, m2, m3, m4);
-        ledStatus(90);
-      }
-
-
-      /* rollKp = rollKp + (ch3_power * 0.05);
-      // rollKi = rollKi + (ch3_power * 0.005);
-       rollKd = rollKd + (ch3_power * 0.0025);
-       rolls.SetTunings(rollKp, rollKi, rollKd);
-       rollsR.SetTunings(rollKp, rollKi, rollKd);
-
-       rollKp = 0.1;
-       rollKi = 0;
-       rollKd = 0;
-       */
-      /*if ((times - timeLED13) >= 1000) {
-        timeLED13 = times;
-        digitalWrite(13, HIGH);
-      } else {
-        digitalWrite(13, LOW);
-      }
-      */
-      /* Blink LED to show work in PID loop
-      *
-      *
-      */
-
-
-      /*
-       *
-       *
-       */
-
-    }
-  }//************ End of //PID rolls sampleing time = 20ms  ***************
+  //}//************ End of //PID rolls sampleing time = 10ms  ***************
 }
 
 void ledStatus(int timeBlink) {
@@ -1395,22 +716,7 @@ boolean checkBattery() {
 }
 // end funion for check batt low V cut off
 
-// Function for convert 0' - 360'   to  0 --- 100 ----0 ----100 ---- 0 ---- nifinitry
-void convertHeadingDegree() {
-  //outputYawSetpoint
-  outputYawSetpoint = (M_PI / 180) * (headingDegrees / 2);
-  outputYawSetpoint = (sin( outputYawSetpoint)) * 180;//use outputYawSetpoint instead headingdegree
 
-  if ((headingDegrees / 2) > 90) {
-    //Serial.println("        revers PID yaw   ");
-    yaws.SetControllerDirection(REVERSE);
-    yawsR.SetControllerDirection(DIRECT);
-  }
-  if ((headingDegrees / 2) < 90) {
-    // Serial.println("        normal PID  yaw ");
-    yawsR.SetControllerDirection(REVERSE);
-    yaws.SetControllerDirection(DIRECT);
 
-  }
-}
-//  End  // Function for convert 0' - 360'   to  0 --- 100
+
+

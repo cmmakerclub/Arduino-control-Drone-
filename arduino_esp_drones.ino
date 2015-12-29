@@ -1,99 +1,81 @@
-
-#include<Wire.h>
-#include <PID_v1.h>
-#include <SoftwareSerial.h>
-
-SoftwareSerial mySerial(8, 7); // RX, TX
-float YPR[3];
-
-
-unsigned char Re_buf[8], counter = 0;
-unsigned char sign = 0;
-
-int toreadGY25 = 1;
-int powers = 0;
-boolean battOK = true;
-int onKiR = 0;
-int onKiP = 0;
-float pitchKit = 0;
-float rollsKit = 0;
-
-
-#define motor1  3
-#define motor2  9
-#define motor3  10
-#define motor4  11
-
-int countTemp = 0, ch3_powerTemp = 0;
-
-int motor_A, motor_B, motor_C, motor_D;
-float q_yaw, q_roll, q_pitch;
-
-int countTempAngle = 0;
-float rollTemp, pitchTemp;
-
-
-unsigned long timer, sampling, timeDetect, timeLED13, samplePID, sampling2;
-
-#define LED_PIN 13 // (Arduino is 13, Teensy is 11, Teensy++ is 6)
-
-// SET Variables to read data ESP
-String inputString = "", b;        // a string to hold incoming data
-boolean stringComplete = false;  // whether the string is complete
-int ch1_Eleveltor = 126, ch2_roll = 126, ch3_power = 0, ch4_yaw = 126;
-//char c[40];
-//int countC;
-//byte inByte;
-//int ic[4];
-boolean battStates = false;
-int sensorValue = 0;        // value read from the pot
-int ledState = LOW;
-boolean caribate = false, tackFirstMPU = true;
+#include <Arduino.h>
+#include <Wire.h>
+//#include "MS561101BA.h"
+#include "config.h"
+//#include "multi_rxPPM2560.h"
+#include "mpu6050.h"
+#include "ahrs_tin.h"
+//#include "Control_PID.h"
+//#include "motorX4.h"
+//#include "GPS_multi.h"
+//#include "Ultrasonic.h"
 
 
 
-//^^^^^^^^^^^^^^ Set var PID ^^^^^^^^^^^^^^^//
-//Define Variables we'll be connecting to
-double  SetpointP = 0, SetpointR = 0, SetpointY = 0;
-double rollKp = 0, rollKi = 0, rollKd = 0;
-int SampleTime  =  20;
-float rollPitchYawGain = 0.4;
 
-double  InputRoll, OutputRoll, OutputRollR; // right <---> left
-//double InputRoll24, OutputRoll24;
+float getAvg(float * buff, int size)
+{
+  float sum = 0.0;
+  for (int i = 0; i < size; i++)
+  {
+    sum += buff[i];
+  }
+  return sum / size;
+}
 
-double  InputPicht, OutputPicht, OutputPichtR; // forward <-----> back
-//double InputPicht24, OutputPicht24;
+//setup function
+void checkBattery();
+void pidControlRoll();
+void pidControlPitch();
+void pidControlYaw();
+void ledStatus(int timeBlink);
+void readDataFromESP01();
 
-double  InputYaw, OutputYaw, OutputYawR; // spin left <------> right  !!!!!!!!!!!   high 14 for spin left
-//double InputYaw23, OutputYaw23; // !!!!!!!!!!!!!!   high  23 for spin right
-float trimYaw = 0;
+void setup()
+{
+  Serial.begin(115200);//38400
+  pinMode(13, OUTPUT);//pinMode (30, OUTPUT);pinMode (31, OUTPUT);//pinMode (30, OUTPUT);pinMode (31, OUTPUT);//(13=A=M),(31=B=STABLEPIN),(30=C,GPS FIG LEDPIN)
+  digitalWrite(13, HIGH);
+  //Serial1.begin(115200);//CRIUS Bluetooth Module pin code 0000
+  //Serial3.begin(38400);//3DR Radio Telemetry Kit 433Mhz
+  //configureReceiver();//find multi_rx.h
+  // motor_initialize();//find motor.h
+  // ESC_calibration();//find motor.h
+  // GPS_multiInt();
+  Wire.begin();
+  delay(1);
+  mpu6050_initialize();
+  delay(1);
+  //MagHMC5883Int();
+  delay(1);
+  digitalWrite(13, HIGH);
+  // baro.init(MS561101BA_ADDR_CSB_LOW);
+  // UltrasonicInt();
+  TWBR = ((F_CPU / 400000L) - 16) / 2; // change the I2C clock rate to 400kHz
+  delay(1);
+  for (uint8_t i = 0; i < 50; i++)
+  {
+    mpu6050_Gyro_Values();
+    mpu6050_Accel_Values();
+    //Mag5883Read();
+    // UltrasonicRead();
+    // temperature = baro.getTemperature(MS561101BA_OSR_4096);
+    // presser = baro.getPressure(MS561101BA_OSR_4096);
+    // pushAvg(presser);
+    delay(20);
+  }
+  //Altitude_Ground = Altitude_baro/10.0;
+  //sea_press = presser + 0.11;//presser 1003.52
+  //Serial.print("presser ");Serial.println(sea_press);
+  digitalWrite(13, LOW);
+  sensor_Calibrate();//sensor.h
 
+  ahrs_initialize();//ahrs.h
+  setupFourthOrder();
+  //MagHMC5883Int();
+  //Mag_Calibrate();
+  //RC_Calibrate();//"multi_rxPPM2560.h"
 
-
-PID rollsR  (&InputRoll,  &OutputRollR,  &SetpointR, 0.8 , 0, 0.22,   DIRECT); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
-PID pichtsR (&InputPicht, &OutputPichtR, &SetpointP, 0.8 , 0, 0.22,   DIRECT); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
-PID yawsR   (&InputYaw,   &OutputYawR,   &SetpointY, 0 , 0, 0, DIRECT); // spin right value degree +
-//PID howers (&InputHower,   &OutputHower,   &SetpointHower, 1, 1, 1, DIRECT); // if az < setpoint  all motor up   and   az > setpoint all motor down
-
-//revers PID
-PID rolls  (&InputRoll,  &OutputRoll,  &SetpointR, 0.8 , 0, 0.24,   REVERSE); // if roll < 0  13 Up(Throttle + OutputRoll)  and   if roll > 0  24 up(Throttle + OutputRoll)
-PID pichts (&InputPicht, &OutputPicht, &SetpointP, 0.8 , 0, 0.24,  REVERSE); // if Picht < 0 12 up(Throttle + OutputPicht)  and if picht > 0 34  up(Throttle + OutputPicht)
-PID yaws   (&InputYaw,   &OutputYaw,   &SetpointY, 0 , 0, 0, REVERSE); // if yaw < 0 23 up(Throttle + OutYaw) and if yaw > 0 14 up(Throttle + OutYaw)
-
-
-
-void setup() {
-  // put your setup code here, to run once:
-  // Wire.pins(0, 2);
-  //Wire.begin();
-  // Wire.beginTransmission(MPU);
-  //Wire.write(0x6B);  // PWR_MGMT_1 register
-  // Wire.write(0);     // set to zero (wakes up the MPU-6050)
-  // Wire.endTransmission(true);
-  Serial.begin(115200);
-  // set the data rate for the SoftwareSerial port
-  mySerial.begin(115200);
 
   //---------------------------------------------- Set PWM frequency for D9 & D10 ------------------------------
 
@@ -118,191 +100,226 @@ void setup() {
   analogWrite(motor3, 0);
   analogWrite(motor4, 0);
 
-
-  // setup PID
-  rolls.SetSampleTime(SampleTime);// SampleTime ms
-  pichts.SetSampleTime(SampleTime);
-  yaws.SetSampleTime(SampleTime);
-  //howers.SetSampleTime(SampleTime);
-
-  rollsR.SetSampleTime(SampleTime);// SampleTime ms
-  pichtsR.SetSampleTime(SampleTime);
-  yawsR.SetSampleTime(SampleTime);
+  //))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 
 
-  // end set up PID
+  Serial.print("TK_Quadrotor_Run_Roop_100Hz"); Serial.println("\t");
+  sensorPreviousTime = micros();
+  previousTime = micros();
+}
+void loop() {
 
+  //if (battStates) {
+    Dt_sensor = micros() - sensorPreviousTime;///////////Roop sensor/////////
+    if (Dt_sensor <= 0)
+    {
+      Dt_sensor = 1001;
+    }
+    if (Dt_sensor >= 1000 && gyroSamples < 4) ////Collect 3 samples = 2760 us  && gyroSamples < 5  && gyroSamples < 5
+    {
+      sensorPreviousTime = micros();
+      mpu6050_readGyroSum();
+      mpu6050_readAccelSum();
+    }
+    Dt_roop = micros() - previousTime;// 100 Hz task loop (10 ms)  , 5000 = 0.02626 ms
+    if (Dt_roop <= 0)
+    {
+      Dt_roop = 10001;
+    }
+    if (Dt_roop >= 10000)
+    {
+      previousTime = micros();
+      G_Dt = Dt_roop * 0.000001;
+      frameCounter++;
+      mpu6050_Get_accel();
+      mpu6050_Get_gyro();
+      ////////////////Moving Average Filters///////////////////////////
+      GyroXf = (GyroX + GyroX2) / 2.0;
+      GyroYf = (GyroY + GyroY2) / 2.0;
+      GyroZf = (GyroZ + GyroZ2) / 2.0;
+      GyroX2 = GyroX; GyroY2 = GyroY; GyroZ2 = GyroZ; //gyro Old1
+      ////////////////Low pass filter/////////////////////////////////
+      AccXf = AccX;
+      AccYf = AccY;
+      AccZf = AccZ;
+      //AccXf = AccXf + (AccX - AccXf)*15.6*G_Dt;//29.6 15.4  //Low pass filter ,smoothing factor  α := dt / (RC + dt)
+      //AccYf = AccYf + (AccY - AccYf)*15.6*G_Dt;//15.4
+      //AccZf = AccZf + (AccZ - AccZf)*15.6*G_Dt;//15.4
+      ///////////////////Filter FourthOrder ///////////////////////////////////////
+      Accel[XAXIS] = AccX;
+      Accel[YAXIS] = AccY;
+      Accel[ZAXIS] = AccZ;
+      for (int axis = XAXIS; axis <= ZAXIS; axis++) {
+        filteredAccel[axis] = computeFourthOrder(Accel[axis], &fourthOrder[axis]);//"ahrs_tin.h"
+      }
+
+      //AccXf = filteredAccel[XAXIS];
+      //AccYf = filteredAccel[YAXIS];
+      //AccZf = filteredAccel[ZAXIS];
+      //////////////////////////////////////////////////////////
+      //////////////////////////////////////////////////////////
+      //ahrs_updateMARG(GyroXf, GyroYf, GyroZf, AccXf, AccYf, AccZf, c_magnetom_x, c_magnetom_y, c_magnetom_z, G_Dt);//quaternion ,direction cosine matrix ,Euler angles
+
+      ahrs_updateMARG(GyroXf, GyroYf, GyroZf, filteredAccel[XAXIS], filteredAccel[YAXIS], filteredAccel[ZAXIS], c_magnetom_x, c_magnetom_y, c_magnetom_z, G_Dt);
+      ahrs_p -= 3;// roll trim for test model
+      ahrs_r -= 3.85; // pitch trim for test model
+
+      //x_angle = x_angle + (GyroXf*RAD_TO_DEG*G_Dt);
+      //x_angle = kalmanCalculateX(ahrs_r*RAD_TO_DEG, GyroX*RAD_TO_DEG, G_Dt);
+      //y_angle = kalmanCalculateY(ahrs_p*RAD_TO_DEG, GyroY*RAD_TO_DEG, G_Dt);
+
+      // make set point
+      setHeading = ahrs_y;
+      Heading *= 10;
+
+      setPointRoll = (126 - ch2_roll) * rollPitchYawGain;
+      setPointPitch = (126 - ch1_Eleveltor) * rollPitchYawGain;
+
+      if (ch4_yaw > 125 && ch4_yaw < 127) {
+        setPointYaw = 0.0;//yawGain
+      } else {
+        setPointYaw = ((ch4_yaw  - 126 ) * yawGain );//yawGain
+      }
+
+
+
+      //PID call
+      pidControlRoll();
+      pidControlPitch();
+      pidControlYaw();
+
+      //end PID call
+
+      // drive Motor  powers
+      motor_B = (powers - battcut) - OutputP + OutputR - OutputY;//front left(1)
+      motor_A = (powers - battcut) - OutputP - OutputR + OutputY;//front right(2)
+      motor_C = (powers - battcut) + OutputP + OutputR + OutputY;//back left(3)
+      motor_D = (powers - battcut) + OutputP - OutputR - OutputY;//back right(4)
+      // }
+      // limmit output max, min
+      if (motor_A < 1) {
+        motor_A = 0;
+      }
+      if (motor_B < 1) {
+        motor_B = 0;
+      }
+      if (motor_C < 1) {
+        motor_C = 0;
+      }
+      if (motor_D < 1) {
+        motor_D = 0;
+      }
+
+      if (motor_A > 255) {
+        motor_A = 255;
+      }
+      if (motor_B > 255) {
+        motor_B = 255;
+      }
+      if (motor_C > 255) {
+        motor_C = 255;
+      }
+      if (motor_D > 255) {
+        motor_D = 255;
+      }
+
+
+      driveMotor(motor_B, motor_A, motor_C, motor_D);
+      ledStatus(500);
+
+
+      //
+      /*    Serial.print(" ahrs_y =  "); //Heading
+          Serial.print(ahrs_y);
+          Serial.print("   ahrs_p =  ");
+          Serial.print(ahrs_p);//roll
+          Serial.print("   ahrs_r =  ");
+          Serial.print(ahrs_r);//pitch
+          setHeading = ahrs_y;
+          Serial.print("    Heading  =  ");
+          Serial.println( Heading * 10, 2); //max spin 1.5//yaw
+      */
+      if (frameCounter >= 100) {// loop 1Hz
+        checkBattery();// check battery V every 1sec
+        if (!battStates){
+          battcut += 20;
+        }else{
+          battcut = 0;
+        }
+        battcut = constrain(battcut , 0, 255);
+        frameCounter = 0;
+      }
+    }// end loop task 10ms
+    /*
+       waiteing read data from ESP8266
+    */
+    readDataFromESP01();
+    /*
+
+    */
+
+  //} else { // end check batt
+   // ledStatus(50); //arlram batt low
+  //}
+
+}// end void loop
+/*
+
+   PIDtong
+   Input=angle_y;
+    error1 = setPoint - angle_y;
+    errSum1 = errSum1+error1;
+    dErr1 = (error1 - lastErr) / dt;
+    Output = kp * error1 + ki * errSum1 + kd * dErr1;
+    lastErr = error1;
+*/
+/*
+   Function PID input : setpoint,angle   Output : PWM(int)
+*/
+void pidControlRoll() {
+
+  //Input = angle_p;
+  error1R = setPointRoll - ahrs_p -2;
+  errSum1R = errSum1R + error1R;
+  dErr1R = (error1R - lastErrR) / DTPID;
+  OutputR = kpRoll * error1R + kiR * errSum1R + kdR * dErr1R;
+  lastErrR = error1R;
 
 }
 
-void loop() {
-  // put your main code here, to run repeatedly:
-  if (battOK) {
-    //if (true) {
+void pidControlPitch() {
 
-    
+  //Input = angle_p;
+  error1P = setPointPitch - ahrs_r - 2;
+  errSum1P = errSum1P + error1P;
+  dErr1P = (error1P - lastErrP) / DTPID;
+  OutputP = kpPitch * error1P + kiP * errSum1P + kdP * dErr1P;
+  lastErrP = error1P;
 
-    //
-    readDataFromESP01();
-    // if (toreadGY25 == 1) {
-
-    //}
-    //
-    // if (timer - sampling >= 1000 ) {
-    /// sampling2 = timer;
-    // toreadGY25 = 1;
-    // q_yaw -= 0.01;
+}
 
 
-    // }//end task read angle
-  timer = millis();
-    if (((timer - samplePID) >= 20)) {
-      samplePID = timer;
-      readGY25();
-      //
-      if (sign)
-      {
-        sign = 0;
-        if (Re_buf[0] == 0xAA && Re_buf[7] == 0x55)   //检查帧头，帧尾
-        {
-          YPR[0] = (Re_buf[1] << 8 | Re_buf[2]) / 1; //合成数据，去掉小数点后2位
-          YPR[1] = (Re_buf[3] << 8 | Re_buf[4]) / 1;
-          YPR[2] = (Re_buf[5] << 8 | Re_buf[6]) / 1;
-          /* Serial.print("YPR[0] : ");
-            Serial.print(YPR[0]/100);
-            Serial.print("  YPR[1] : ");
-            Serial.print(YPR[1]/100);
-            Serial.print("  YPR[2] : ");
-            Serial.println(YPR[2]/100);
-          */
-          //protect when value fail
-          q_yaw = YPR[0] / 100 ;
-          q_pitch = YPR[2] / 100;
-          q_roll = YPR[1] / 100;
-          //stable check
-          //+++++++++++++++++++++++++++++++++
-          if (q_pitch < 2  && q_pitch > -2  && q_roll < 2 && q_roll > -2 ) {
-            //caribate = true;
-            //call led
+void pidControlYaw() {
+
+  //Input = angle_p;
+  error1Y = setPointYaw - Heading;
+  errSum1Y = errSum1Y + error1Y;
+  dErr1Y = (error1Y - lastErrY) / DTPID;
+  OutputY = kpYaw * error1Y + kiY * errSum1Y + kdY * dErr1Y;
+  lastErrY = error1Y;
+
+}
 
 
-            if (!caribate) {
-              rolls.SetMode(AUTOMATIC);
-              pichts.SetMode(AUTOMATIC);
-              yaws.SetMode(AUTOMATIC);
-
-              rollsR.SetMode(AUTOMATIC);
-              pichtsR.SetMode(AUTOMATIC);
-              yawsR.SetMode(AUTOMATIC);
-
-              //SetpointY = q_yaw;
-              caribate = true;
-            }
-          } else { // wait for MPU6050 set angle
-            ledStatus(2000);
-          }
-          //-----------------------------------
-
-          //
-
-          InputRoll =  q_roll;
-          InputPicht = q_pitch;
-          InputYaw =  q_yaw; ; //outputYawSetpoint
-
-          SetpointP = (ch1_Eleveltor - 126 ) * rollPitchYawGain;
-          SetpointR = (ch2_roll - 126 ) * rollPitchYawGain;
+/*
+   end PID
+*/
 
 
-          SetpointY = ((ch4_yaw  - 126 ) * 0.65 ) + q_yaw;
+/*
 
-        }
-      }
-      // ch3_power = 180;// test
-
-      //q_roll = 0;//test
-      //q_pitch = 0;//test
-      //q_yaw = 0;//test
-      //pidControl();
-      if (rolls.Compute() && pichts.Compute() && rollsR.Compute() && pichtsR.Compute() && yaws.Compute() && yawsR.Compute() && caribate ) {
-
-        ledStatus(400);
-
-        //sum PID
-
-        //  if (headingDegrees > 1  || headingDegrees < 358.5) {// normall
-        //if (q_pitch < 65  && q_pitch > -35  && q_roll < 35 && q_roll > -35 ) {
-        /* motor_B = ((powers) + OutputRoll - OutputRollR  + OutputPichtR - OutputPicht - OutputYaw + OutputYawR) ;
-          motor_A = (powers * 0.9) + OutputRollR - OutputRoll  + OutputPichtR - OutputPicht + OutputYaw - OutputYawR;
-          motor_C = (powers * (0.79)) + OutputRoll - OutputRollR  + OutputPicht - OutputPichtR + OutputYaw - OutputYawR ;
-          motor_D = (((powers * (0.79)) * 0.9)  + OutputRollR - OutputRoll + OutputPicht - OutputPichtR - OutputYaw + OutputYawR);
-        */
-        motor_B = (powers) + ((OutputRoll - OutputRollR  + OutputPichtR - OutputPicht - OutputYaw + OutputYawR) * 1) ;
-        motor_A = (powers) + ((OutputRollR - OutputRoll  + OutputPichtR - OutputPicht + OutputYaw - OutputYawR) * 1);
-        motor_C = (powers) + ((OutputRoll - OutputRollR  + OutputPicht - OutputPichtR + OutputYaw - OutputYawR ) * 1);
-        motor_D = (powers)  + ((OutputRollR - OutputRoll + OutputPicht - OutputPichtR - OutputYaw + OutputYawR) * 1);
-        // }
-        // limmit output max, min
-        if (motor_A < 1) {
-          motor_A = 0;
-        }
-        if (motor_B < 1) {
-          motor_B = 0;
-        }
-        if (motor_C < 1) {
-          motor_C = 0;
-        }
-        if (motor_D < 1) {
-          motor_D = 0;
-        }
-
-        if (motor_A > 255) {
-          motor_A = 255;
-        }
-        if (motor_B > 255) {
-          motor_B = 255;
-        }
-        if (motor_C > 255) {
-          motor_C = 255;
-        }
-        if (motor_D > 255) {
-          motor_D = 255;
-        }
-
-        //callPID();
-        if (checkBattery()) {
-          driveMotor(motor_B, motor_A, motor_C, motor_D);
-        } else {
-          driveMotor(0, 0, 0, 0);
-          ledStatus(89);
-        }
-        /*Serial.print("m1  l ");
-          Serial.print(motor_B);
-          Serial.print("   m2  r ");
-          Serial.print(motor_A);
-          Serial.print("   m3  r ");
-          Serial.print(motor_C);
-          Serial.print("   m4  l ");
-          Serial.print(motor_D);
-
-          Serial.print("  Yaw  ");
-          Serial.print(q_yaw);
-          Serial.print("   roll  ");
-          Serial.print(q_roll);
-          Serial.print("   pitch  ");
-          Serial.println(q_pitch);*/
-
-
-
-      }//end call PID work
-    } //end task 20ms
-  } else {
-    ledStatus(50);
-    Serial.println("Low battery");
-  }
-}// end void loop
-
-
+*/
 //Keep data from RX ESP01  serialEvent
 /*
   SerialEvent occurs whenever a new data comes in the
@@ -362,30 +379,31 @@ void readDataFromESP01() {
               countTemp = 1;
             }
       */
-      powers = ch3_power * 0.85;
+      powers = ch3_power * powerRate;
+      
       //powers = powers * 0.65;
       //powers = map(ch3_power, 0, 255, 0, 128);
       //ch3_power = ch3_power*0.4;
       ch4_yaw = b.substring((b.indexOf('d') + 1), b.indexOf('p')).toInt();
       //ch4_yaw = ch4_yaw - (rollKi*10);
-      ch4_yaw = 126 - ( ch4_yaw - 126);
+      //ch4_yaw = 126 - ( ch4_yaw - 126);
       //
 
-      rollKp = b.substring((b.indexOf('p') + 1), b.indexOf('i')).toInt();
-      rollKi = b.substring((b.indexOf('i') + 1), b.indexOf('k')).toInt();
-      rollKd = b.substring((b.indexOf('k') + 1), b.indexOf('z')).toInt();
-      //onKiR = b.substring((b.indexOf('z') + 1), b.indexOf('x')).toInt();
-      //onKiP = b.substring((b.indexOf('x') + 1), b.indexOf('!')).toInt();
-
-      rollKp = rollKp / 10;
-      rollKi = rollKi / 10;
-      rollKd = rollKd / 10;
+      //      rollKp = b.substring((b.indexOf('p') + 1), b.indexOf('i')).toInt();
+      //      rollKi = b.substring((b.indexOf('i') + 1), b.indexOf('k')).toInt();
+      //      rollKd = b.substring((b.indexOf('k') + 1), b.indexOf('z')).toInt();
+      //      //onKiR = b.substring((b.indexOf('z') + 1), b.indexOf('x')).toInt();
+      //      //onKiP = b.substring((b.indexOf('x') + 1), b.indexOf('!')).toInt();
+      //
+      //      rollKp = rollKp / 100;
+      //      rollKi = rollKi / 1000;
+      //      rollKd = rollKd / 100;
 
       //
       // gainYaw14,gainYaw23
 
-      yaws.SetTunings(rollKp , 0, 0);
-      yawsR.SetTunings(rollKp, 0, 0);
+      //yaws.SetTunings(rollKp , 0, 0);
+      //yawsR.SetTunings(rollKp, 0, 0);
       /*
          float pitchKit = 0;
         float rollsKit = 0;
@@ -393,15 +411,15 @@ void readDataFromESP01() {
       //set ki to 0 when roll left or right
 
       //
-      // rolls.SetTunings(rollKp , 0, rollKd);
-      //rollsR.SetTunings(rollKp, 0, rollKd);
+      //rolls.SetTunings(rollKp , 0, rollKd + rollKi);
+      // rollsR.SetTunings(rollKp, 0, rollKd + rollKi);
 
 
       // clear the string:
       inputString = "";
       //countC = 0;
       stringComplete = false;
-      timeDetect = timer;
+      timeDetect = millis();
 
     }
 
@@ -409,8 +427,8 @@ void readDataFromESP01() {
 
 
   } else {
-    if (timer - timeDetect > 500 ) {
-      timeDetect = timer;
+    if (millis() - timeDetect > 500 ) {
+      timeDetect = millis();
       //stop motor when no data
       ch3_power = 0;
       //lostConnect = true;
@@ -426,17 +444,19 @@ void readDataFromESP01() {
 
 ////  *********************   END  readDataFromESP01()
 
-boolean checkBattery() {
+
+
+void checkBattery() {
 
   sensorValue = analogRead(A1);// get battery V
   if (sensorValue > 610) { // if battery V > 3 battStates = true
     battStates = true;
   } else { // if battery V < 3.3 battStates = false
     battStates = false;
-    battOK = false;
+    //battOK = false;
   }
 
-  return battStates;
+  //return battStates;
 }
 // end funion for check batt low V cut off
 
@@ -482,21 +502,5 @@ void driveMotor(int outputPID1, int outputPID2, int outputPID3, int outputPID4)
 // >>>>>>>>>>>>>>>>>>>>>>   End function drive Motor  <<<<<<<<<<<<<<<
 
 
-// function read data from GY25
-void readGY25() {
-  mySerial.write(0XA5);
-  mySerial.write(0X51);    //0xA5 + 0x51: Query mode, the direct return angle value,
-  while (mySerial.available()) {
-    Re_buf[counter] = (unsigned char)mySerial.read();
-    if (counter == 0 && Re_buf[0] != 0xAA) return; // 检查帧头
-    counter++;
-    if (counter == 8)             //接收到数据
-    {
-      counter = 0;               //重新赋值，准备下一帧数据的接收
-      sign = 1;
-    }
-  }
-
-}
 
 
